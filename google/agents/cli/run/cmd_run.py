@@ -20,7 +20,6 @@ import asyncio
 import base64
 import json
 import mimetypes
-import tempfile
 import uuid
 from pathlib import Path
 from typing import NamedTuple
@@ -59,6 +58,7 @@ from google.agents.cli.run._multimodal import (
 
 _AGENT_ENGINE_URL_FRAGMENT = "aiplatform.googleapis.com"
 _REASONING_ENGINE_PATH = "reasoningEngines"
+_ARTIFACTS_DIR = Path(".google-agents-cli") / "artifacts"
 
 
 class _DispatchTarget(NamedTuple):
@@ -232,6 +232,7 @@ def _build_remote_headers(
 )
 def cmd_run(
     message: str,
+    *,
     url: str | None,
     mode: str | None,
     app_name: str | None,
@@ -260,6 +261,12 @@ def cmd_run(
     \b
     Supports --file for multimodal input and --session-id for
     conversation continuity.
+
+    \b
+    Binary artifacts (images, audio, files) returned by the agent are
+    saved under '.google-agents-cli/artifacts/' in the project root and
+    listed in an 'Artifacts:' footer at the end of the response.
+    File references returned by URI are not downloaded.
     """
     target = _resolve_dispatch_target(
         url=url,
@@ -271,28 +278,36 @@ def cmd_run(
         click.echo(f"Querying remote agent: {url} (mode: {target.mode})")
 
     try:
-        _dispatch_query(
-            service_url=target.service_url,
-            message=message,
-            files=files,
-            headers=target.headers,
-            mode=target.mode,
-            app_name=target.app_name,
-            session_id=session_id,
-            verbose=verbose,
-        )
-    except (
-        requests.ConnectionError,
-        requests.Timeout,
-        httpx.TransportError,
-    ) as exc:
+        try:
+            _dispatch_query(
+                service_url=target.service_url,
+                message=message,
+                files=files,
+                headers=target.headers,
+                mode=target.mode,
+                app_name=target.app_name,
+                session_id=session_id,
+                verbose=verbose,
+            )
+        except (
+            requests.ConnectionError,
+            requests.Timeout,
+            httpx.TransportError,
+        ) as exc:
+            if not url:
+                raise
+            raise click.ClickException(
+                f"Could not reach remote agent at: {url}\n"
+                f"  {exc}\n"
+                "  Check that the URL is correct and the service is running."
+            ) from exc
+    except Exception:
         if not url:
-            raise
-        raise click.ClickException(
-            f"Could not reach remote agent at: {url}\n"
-            f"  {exc}\n"
-            "  Check that the URL is correct and the service is running."
-        ) from exc
+            # If we got an error for the local server,
+            # stop it so that a later retry will start a fresh one.
+            chdir_project_root()
+            stop_server(Path.cwd())
+        raise
 
 
 def _is_agent_runtime_url(url: str) -> bool:
@@ -367,6 +382,44 @@ def _print_session_id(session_id: str | None) -> None:
     click.secho(f"Session: {session_id} (resume with --session-id)", dim=True)
 
 
+def _print_artifacts(paths: list[str]) -> None:
+    """Print an Artifacts footer listing binary artifacts saved to disk."""
+    if not paths:
+        return
+    click.echo()
+    click.secho("Artifacts:", dim=True)
+    for path in paths:
+        click.secho(f"  {path}", dim=True)
+
+
+def _save_inline_artifact(data_b64: str, mime_type: str | None) -> str | None:
+    """Decode URL-safe base64 inline data and save it as an artifact.
+
+    Returns the saved path, or ``None`` if decoding failed.
+    """
+    mime = mime_type or "application/octet-stream"
+    try:
+        decoded = base64.urlsafe_b64decode(data_b64)
+    except ValueError as exc:
+        click.secho(
+            f"Warning: could not decode inline {mime} artifact: {exc}",
+            err=True,
+            fg="yellow",
+        )
+        return None
+
+    ext = mimetypes.guess_extension(mime) or ""
+    artifacts_dir = Path.cwd() / _ARTIFACTS_DIR
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    path = artifacts_dir / f"{uuid.uuid4().hex[:8]}{ext}"
+    path.write_bytes(decoded)
+    # Prefer a relative path so terminals can cmd+click and shells can tab-complete.
+    try:
+        return str(path.relative_to(Path.cwd()))
+    except ValueError:
+        return str(path)
+
+
 def _print_author_tag(author: str | None, last_author: str | None) -> str | None:
     """Print ``[author]:`` tag when author changes. Returns updated last_author."""
     if author and author != last_author:
@@ -377,14 +430,21 @@ def _print_author_tag(author: str | None, last_author: str | None) -> str | None
     return last_author
 
 
-def _print_sse_event(event: dict, last_author: str | None, verbose: bool) -> str | None:
-    """Process and print a single SSE/NDJSON event. Returns updated last_author."""
+def _print_sse_event(
+    event: dict,
+    last_author: str | None,
+    verbose: bool,
+    artifacts: list[str],
+) -> str | None:
+    """Process and print a single SSE/NDJSON event. Returns updated last_author.
+    Appends paths of any saved binary artifacts to ``artifacts``.
+    """
     author = event.get("author")
     last_author = _print_author_tag(author, last_author)
     content = event.get("content")
     if isinstance(content, dict):
         for part in content.get("parts", []):
-            _print_sse_part(part)
+            _print_sse_part(part, artifacts)
     if verbose:
         click.echo()
         click.secho(json.dumps(event, indent=2), dim=True)
@@ -434,6 +494,7 @@ def _query_adk_sse(
     }
 
     last_author = None
+    artifacts: list[str] = []
     with requests.post(
         run_url, headers=headers, json=payload, stream=True, timeout=120
     ) as resp:
@@ -449,9 +510,10 @@ def _query_adk_sse(
                 event = json.loads(data_str)
             except json.JSONDecodeError:
                 continue
-            last_author = _print_sse_event(event, last_author, verbose)
+            last_author = _print_sse_event(event, last_author, verbose, artifacts)
 
     click.echo()
+    _print_artifacts(artifacts)
     _print_session_id(session_id)
 
 
@@ -533,6 +595,7 @@ def _query_agent_runtime_sse(
                 f"  {resp.text}{hint}"
             )
         last_author = None
+        artifacts: list[str] = []
         for line in resp.iter_lines(decode_unicode=True):
             if not line:
                 continue
@@ -540,13 +603,15 @@ def _query_agent_runtime_sse(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            last_author = _print_sse_event(event, last_author, verbose)
+            last_author = _print_sse_event(event, last_author, verbose, artifacts)
 
     click.echo()
+    _print_artifacts(artifacts)
     _print_session_id(session_id)
 
 
 def _query_a2a(
+    *,
     card_url: str,
     parts: list[Part],
     headers: dict,
@@ -619,6 +684,7 @@ async def _query_a2a_async(
 
         last_author = None
         response_session_id = None
+        artifacts: list[str] = []
         async for event in a2a_client.send_message(msg):
             if not isinstance(event, tuple):
                 continue
@@ -632,13 +698,13 @@ async def _query_a2a_async(
             if isinstance(update, TaskArtifactUpdateEvent):
                 for part in update.artifact.parts:
                     last_author = _print_author_tag(agent_name, last_author)
-                    _print_a2a_part(part)
+                    _print_a2a_part(part, artifacts)
             # Handle completed tasks with artifacts (non-streaming)
             elif update is None and task.artifacts:
                 for artifact in task.artifacts:
                     for part in artifact.parts:
                         last_author = _print_author_tag(agent_name, last_author)
-                        _print_a2a_part(part)
+                        _print_a2a_part(part, artifacts)
 
             if verbose:
                 # Raw event dump (matches ADK/Agent Runtime output)
@@ -652,11 +718,12 @@ async def _query_a2a_async(
                     click.secho(json.dumps(raw, indent=2, default=str), dim=True)
 
     click.echo()
+    _print_artifacts(artifacts)
     _print_session_id(response_session_id)
 
 
-def _print_a2a_part(part: Part) -> None:
-    """Print an A2A response part to the terminal."""
+def _print_a2a_part(part: Part, artifacts: list[str]) -> None:
+    """Print an A2A response part. Appends saved artifact paths to ``artifacts``."""
     root = part.root
     if isinstance(root, TextPart) and root.text:
         click.echo(root.text, nl=False)
@@ -665,47 +732,38 @@ def _print_a2a_part(part: Part) -> None:
         if isinstance(file_data, FileWithUri):
             click.echo(f"\n[file: {file_data.uri}]", nl=False)
         elif isinstance(file_data, FileWithBytes):
-            # Save binary content to a temp file
-            mime = file_data.mime_type or "application/octet-stream"
-            ext = mimetypes.guess_extension(mime) or ""
-            with tempfile.NamedTemporaryFile(
-                suffix=ext, delete=False, prefix="agent_response_"
-            ) as f:
-                f.write(base64.b64decode(file_data.bytes))
-                click.echo(f"\n[file saved: {f.name}]", nl=False)
+            path = _save_inline_artifact(file_data.bytes, file_data.mime_type)
+            if path is not None:
+                artifacts.append(path)
     elif hasattr(root, "data") and root.data is not None:
         click.echo(f"\n{json.dumps(root.data, indent=2)}", nl=False)
 
 
-def _print_sse_part(part: dict) -> None:
+def _print_sse_part(part: dict, artifacts: list[str]) -> None:
     """Print an ADK SSE response part to the terminal."""
     text = part.get("text")
     if text:
         click.echo(text, nl=False)
         return
-    inline_data = part.get("inline_data")
+    inline_data = part.get("inlineData")
     if inline_data:
-        mime = inline_data.get("mime_type", "application/octet-stream")
-        ext = mimetypes.guess_extension(mime) or ""
-        with tempfile.NamedTemporaryFile(
-            suffix=ext, delete=False, prefix="agent_response_"
-        ) as f:
-            f.write(base64.b64decode(inline_data["data"]))
-            click.echo(f"\n[file saved: {f.name}]", nl=False)
+        path = _save_inline_artifact(inline_data["data"], inline_data.get("mimeType"))
+        if path is not None:
+            artifacts.append(path)
         return
-    file_data = part.get("file_data")
+    file_data = part.get("fileData")
     if file_data:
-        uri = file_data.get("file_uri")
+        uri = file_data.get("fileUri")
         if uri:
             click.echo(f"\n[file: {uri}]", nl=False)
         return
-    function_call = part.get("function_call")
+    function_call = part.get("functionCall")
     if function_call:
         name = function_call.get("name", "")
         args = function_call.get("args", {})
         click.echo(f"\n[tool_call: {name}({json.dumps(args)})]", nl=False)
         return
-    function_response = part.get("function_response")
+    function_response = part.get("functionResponse")
     if function_response:
         name = function_response.get("name", "")
         response = function_response.get("response", {})

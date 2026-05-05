@@ -161,6 +161,7 @@ def display_results(
 
 
 def handle_conflict(
+    *,
     result: FileCompareResult,
     project_dir: pathlib.Path,
     new_template_dir: pathlib.Path,
@@ -267,6 +268,7 @@ def copy_file(src: pathlib.Path, dst: pathlib.Path) -> bool:
 
 
 def apply_changes(
+    *,
     groups: dict[str, list[FileCompareResult]],
     project_dir: pathlib.Path,
     new_template_dir: pathlib.Path,
@@ -320,11 +322,11 @@ def apply_changes(
             continue
 
         action = handle_conflict(
-            result,
-            project_dir,
-            new_template_dir,
-            auto_approve,
-            prefer_new,
+            result=result,
+            project_dir=project_dir,
+            new_template_dir=new_template_dir,
+            auto_approve=auto_approve,
+            prefer_new=prefer_new,
             interactive=interactive,
         )
         if action == "kept_all":

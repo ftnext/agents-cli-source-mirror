@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -225,35 +224,3 @@ def require_a2a_project(cfg: ProjectConfig) -> None:
             "  To add A2A support to your project, run:\n"
             "    agents-cli scaffold enhance"
         )
-
-
-_tool_paths: dict[str, str] = {}
-
-
-def require_tool(name: str, install_hint: str = "") -> str:
-    """Raise if a CLI tool is not found on PATH. Returns the path if found."""
-    if name not in _tool_paths:
-        path = shutil.which(name)
-        if path is None:
-            msg = f"'{name}' is not installed or not on PATH."
-            if install_hint:
-                msg += f"\n  {install_hint}"
-            raise click.ClickException(msg)
-        _tool_paths[name] = path
-    return _tool_paths[name]
-
-
-def get_npx_path() -> str:
-    """Get the path to npx, raising an exception if not found."""
-    return require_tool(
-        "npx",
-        install_hint="Install Node.js (https://nodejs.org/en/download) and try again.",
-    )
-
-
-def get_npm_path() -> str:
-    """Get the path to npm, raising an exception if not found."""
-    return require_tool(
-        "npm",
-        install_hint="Install Node.js (https://nodejs.org/en/download) and try again.",
-    )

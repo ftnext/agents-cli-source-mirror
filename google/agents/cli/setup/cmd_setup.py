@@ -15,14 +15,15 @@
 """agents-cli setup command — install skills via npx skills CLI."""
 
 import random
+import shlex
 import subprocess
 from pathlib import Path
 
 import click
 
-from google.agents.cli._project import get_npx_path
 from google.agents.cli._runner import run
 from google.agents.cli._skills_check import SKILLS_NPX_PACKAGE
+from google.agents.cli._tools import get_npx_path
 
 _MOTTOS = [
     "Give your coding agent the power to build ADK projects.",
@@ -89,8 +90,7 @@ def _run_npx_skills(args, spinner_msg):
     Raises:
         click.ClickException: If the npx process exits non-zero.
     """
-    cmd_str = " ".join(args)
-    click.secho(f"  \u25b8 {cmd_str}", fg="cyan", dim=True)
+    click.secho(f"  \u25b8 {shlex.join(args)}", fg="cyan", dim=True)
 
     summary_lines = []
     proc = subprocess.Popen(
@@ -144,6 +144,58 @@ def _run_npx_skills(args, spinner_msg):
     return summary_lines
 
 
+def _check_legacy_skills():
+    """Check for legacy ADK skills and warn the user if found."""
+    # ── Legacy Skills Detection ──
+    try:
+        import json
+        import logging
+
+        # Run raw command to get all skills without filtering
+        result = run(
+            ["npx", "-y", "skills", "list", "--json"],
+            capture=True,
+            check=False,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            installed_skills = json.loads(result.stdout)
+            legacy_skills = {
+                "adk-cheatsheet",
+                "adk-deploy-guide",
+                "adk-dev-guide",
+                "adk-eval-guide",
+                "adk-observability-guide",
+                "adk-scaffold",
+            }
+
+            found_legacy = []
+            for skill in installed_skills:
+                name = skill.get("name")
+                if name in legacy_skills:
+                    found_legacy.append(name)
+
+            if found_legacy:
+                click.secho(
+                    f"\n⚠️  Warning: Found legacy ADK skills installed: {', '.join(found_legacy)}",
+                    fg="yellow",
+                )
+                click.secho(
+                    "     These may conflict with the new `agents-cli` skills.",
+                    fg="yellow",
+                )
+                click.secho(
+                    "     We suggest you uninstall them to avoid confusion, e.g.:",
+                    dim=True,
+                )
+                for name in found_legacy:
+                    click.secho(f"     npx skills remove {name}", dim=True)
+                click.echo()
+    except Exception as e:
+        # Don't fail the setup if the check fails
+        logging.warning("Could not check for legacy skills: %s", e)
+
+
 @click.command("setup")
 @click.option(
     "--workspace",
@@ -184,7 +236,7 @@ def _run_npx_skills(args, spinner_msg):
     default=None,
     help="Skills source: local path, GitHub owner/repo, or URL. Overrides the bundled skills.",
 )
-def cmd_setup(workspace, skip_auth, dry_run, dev, interactive, skills_source):
+def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source):
     """Install agents-cli and skills to detected coding agents.
 
     Installs the agents-cli tool (via uv tool install) and detects
@@ -243,7 +295,7 @@ def cmd_setup(workspace, skip_auth, dry_run, dev, interactive, skills_source):
             )
         click.echo()
         click.echo("  Would install skills:")
-        click.secho(f"  \u25b8 {' '.join(args)}", fg="cyan", dim=True)
+        click.secho(f"  \u25b8 {shlex.join(args)}", fg="cyan", dim=True)
         click.echo(f"  Scope: {scope}")
         click.echo()
 
@@ -343,6 +395,10 @@ def cmd_setup(workspace, skip_auth, dry_run, dev, interactive, skills_source):
     _print_section(step, "Skills Installation")
     step += 1
     click.echo()
+
+    # ── Legacy Skills Detection ──
+    _check_legacy_skills()
+
     summary_lines = _run_npx_skills(args, "Installing skills")
 
     # ── Summary ──

@@ -282,6 +282,7 @@ def _generate_requirements_file(requirements_path: str) -> None:
 
 
 def deploy_agent_runtime(
+    *,
     cfg: ProjectConfig,
     project: str,
     location: str = "us-east1",

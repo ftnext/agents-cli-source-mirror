@@ -37,7 +37,7 @@ def cmd_update(workspace, yes, interactive):
     """
     click.echo()
 
-    from google.agents.cli._project import get_npx_path
+    from google.agents.cli._tools import get_npx_path
 
     npx_path = get_npx_path()
     args = [npx_path, "-y", SKILLS_NPX_PACKAGE, "update"]

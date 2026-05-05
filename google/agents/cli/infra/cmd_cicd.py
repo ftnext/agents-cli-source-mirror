@@ -26,6 +26,13 @@ import click
 from rich.console import Console
 
 from google.agents.cli._project import chdir_project_root
+from google.agents.cli._tools import (
+    ToolNotFoundError,
+    get_gcloud_path,
+    get_gh_path,
+    get_git_path,
+    get_terraform_path,
+)
 from google.agents.cli.infra._cicd_utils import (
     ProjectConfig,
     create_github_connection,
@@ -60,9 +67,9 @@ def check_gh_cli_installed() -> bool:
         bool: True if GitHub CLI is installed, False otherwise
     """
     try:
-        run_command(["gh", "--version"], capture_output=True, check=True)
+        get_gh_path()
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except ToolNotFoundError:
         return False
 
 
@@ -77,7 +84,9 @@ def check_github_scopes(cicd_runner: str) -> None:
     """
     try:
         # Get scopes from gh auth status
-        result = run_command(["gh", "auth", "status"], capture_output=True, check=True)
+        result = run_command(
+            [get_gh_path(), "auth", "status"], capture_output=True, check=True
+        )
 
         # Parse scopes from the output
         scopes = []
@@ -148,7 +157,7 @@ def setup_git_repository(config: ProjectConfig) -> str:
 
     # Initialize git if not already initialized
     if not (Path.cwd() / ".git").exists():
-        run_command(["git", "init", "-b", "main"])
+        run_command([get_git_path(), "init", "-b", "main"])
         console.print("✅ Git repository initialized")
 
     # Add remote if it doesn't exist
@@ -157,13 +166,15 @@ def setup_git_repository(config: ProjectConfig) -> str:
     )
     try:
         run_command(
-            ["git", "remote", "get-url", "origin"], capture_output=True, check=True
+            [get_git_path(), "remote", "get-url", "origin"],
+            capture_output=True,
+            check=True,
         )
         console.print("✅ Git remote already configured")
     except subprocess.CalledProcessError:
         try:
             run_command(
-                ["git", "remote", "add", "origin", remote_url],
+                [get_git_path(), "remote", "add", "origin", remote_url],
                 capture_output=True,
                 check=True,
             )
@@ -306,7 +317,9 @@ def prompt_for_repository_details(
 ) -> tuple[str, str, bool]:
     """Interactive prompt for repository details."""
     # Get current GitHub username as default owner
-    result = run_command(["gh", "api", "user", "--jq", ".login"], capture_output=True)
+    result = run_command(
+        [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
+    )
     default_owner = result.stdout.strip()
 
     # Get repository name if missing
@@ -346,7 +359,7 @@ def setup_terraform_backend(
     # Ensure bucket exists
     try:
         result = run_command(
-            ["gcloud", "storage", "buckets", "describe", f"gs://{bucket_name}"],
+            [get_gcloud_path(), "storage", "buckets", "describe", f"gs://{bucket_name}"],
             check=False,
             capture_output=True,
         )
@@ -356,7 +369,7 @@ def setup_terraform_backend(
             # Create bucket
             run_command(
                 [
-                    "gcloud",
+                    get_gcloud_path(),
                     "storage",
                     "buckets",
                     "create",
@@ -369,7 +382,7 @@ def setup_terraform_backend(
             # Enable versioning
             run_command(
                 [
-                    "gcloud",
+                    get_gcloud_path(),
                     "storage",
                     "buckets",
                     "update",
@@ -428,7 +441,7 @@ def create_or_update_secret(secret_id: str, secret_value: str, project_id: str) 
         try:
             run_command(
                 [
-                    "gcloud",
+                    get_gcloud_path(),
                     "secrets",
                     "versions",
                     "add",
@@ -444,7 +457,7 @@ def create_or_update_secret(secret_id: str, secret_value: str, project_id: str) 
             try:
                 run_command(
                     [
-                        "gcloud",
+                        get_gcloud_path(),
                         "secrets",
                         "create",
                         secret_id,
@@ -518,6 +531,7 @@ def create_or_update_secret(secret_id: str, secret_value: str, project_id: str) 
     jitter=backoff.full_jitter,
 )
 def setup_cicd(
+    *,
     dev_project: str | None,
     staging_project: str | None,
     prod_project: str | None,
@@ -653,7 +667,7 @@ def setup_cicd(
             )
         if not repository_owner:
             repository_owner = run_command(
-                ["gh", "api", "user", "--jq", ".login"], capture_output=True
+                [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
             ).stdout.strip()
 
     assert repository_name is not None, "Repository name must be provided"
@@ -662,7 +676,7 @@ def setup_cicd(
     # Verify repository state matches the user's intent
     repo_exists = (
         run_command(
-            ["gh", "repo", "view", f"{repository_owner}/{repository_name}"],
+            [get_gh_path(), "repo", "view", f"{repository_owner}/{repository_name}"],
             capture_output=True,
             check=False,
         ).returncode
@@ -762,7 +776,7 @@ def setup_cicd(
         "repository_name": repository_name,
         "repository_owner": repository_owner
         or run_command(
-            ["gh", "api", "user", "--jq", ".login"], capture_output=True
+            [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
         ).stdout.strip(),
     }
 
@@ -807,13 +821,14 @@ def setup_cicd(
         sp_tf_dir = tf_dir.parent / "single-project"
         if sp_tf_dir.exists():
             console.print("\n🏗️ Applying single-project Terraform configuration...")
+            terraform_path = get_terraform_path()
             if local_state:
-                run_command(["terraform", "init", "-backend=false"], cwd=sp_tf_dir)
+                run_command([terraform_path, "init", "-backend=false"], cwd=sp_tf_dir)
             else:
-                run_command(["terraform", "init"], cwd=sp_tf_dir)
+                run_command([terraform_path, "init"], cwd=sp_tf_dir)
             run_command(
                 [
-                    "terraform",
+                    terraform_path,
                     "apply",
                     "-auto-approve",
                     "--var-file",
@@ -827,10 +842,11 @@ def setup_cicd(
 
     # Apply CI/CD Terraform
     console.print("\n🚀 Applying CI/CD Terraform configuration...")
+    terraform_path = get_terraform_path()
     if local_state:
-        run_command(["terraform", "init", "-backend=false"], cwd=tf_dir)
+        run_command([terraform_path, "init", "-backend=false"], cwd=tf_dir)
     else:
-        run_command(["terraform", "init"], cwd=tf_dir)
+        run_command([terraform_path, "init"], cwd=tf_dir)
 
     # Prepare environment variables for Terraform
     terraform_env_vars = {}
@@ -840,7 +856,7 @@ def setup_cicd(
         )
 
     run_command(
-        ["terraform", "apply", "-auto-approve", "--var-file", "vars/env.tfvars"],
+        [terraform_path, "apply", "-auto-approve", "--var-file", "vars/env.tfvars"],
         cwd=tf_dir,
         env_vars=terraform_env_vars if terraform_env_vars else None,
     )

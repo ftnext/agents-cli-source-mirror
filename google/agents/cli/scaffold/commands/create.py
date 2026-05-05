@@ -305,6 +305,7 @@ def normalize_project_name(project_name: str) -> str:
 def create(
     ctx: click.Context,
     project_name: str,
+    *,
     agent: str | None,
     deployment_target: str | None,
     cicd_runner: str | None,
@@ -335,7 +336,7 @@ def create(
 
     # Display welcome banner (unless skipped)
     if not skip_welcome:
-        display_welcome_banner(agent, agent_garden=agent_garden, quiet=auto_approve)
+        display_welcome_banner(agent=agent, agent_garden=agent_garden, quiet=auto_approve)
 
     # Handle missing project name
     if not project_name:
@@ -1363,6 +1364,7 @@ def set_gcp_project(project_id: str, set_quota_project: bool = True) -> None:
 
 
 def setup_gcp_environment(
+    *,
     auto_approve: bool,
     skip_checks: bool,
     region: str,

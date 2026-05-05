@@ -830,6 +830,7 @@ def get_gemini_enterprise_console_url(
 
 
 def register_a2a_agent(
+    *,
     agent_card: dict,
     agent_card_url: str,
     gemini_enterprise_app_id: str,
@@ -978,6 +979,7 @@ def register_a2a_agent(
 
 
 def register_agent(
+    *,
     agent_runtime_id: str,
     gemini_enterprise_app_id: str,
     display_name: str,
@@ -1316,6 +1318,7 @@ def publish_group():
     help="List Gemini Enterprise apps in the current project and exit.",
 )
 def register_gemini_enterprise(
+    *,
     agent_runtime_id: str | None,
     metadata_file: str,
     gemini_enterprise_app_id: str | None,

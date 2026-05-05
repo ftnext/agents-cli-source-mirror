@@ -40,6 +40,7 @@ def _get_version() -> str:
 
 
 def display_welcome_banner(
+    *,
     agent: str | None = None,
     enhance_mode: bool = False,
     agent_garden: bool = False,

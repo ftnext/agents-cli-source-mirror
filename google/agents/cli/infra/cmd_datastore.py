@@ -21,9 +21,9 @@ import click
 from google.agents.cli._project import (
     chdir_project_root,
     read_project_config,
-    require_tool,
 )
 from google.agents.cli._runner import run
+from google.agents.cli._tools import require_tool
 from google.agents.cli.data._helpers import (
     get_datastore_type,
     require_project_id,

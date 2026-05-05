@@ -15,6 +15,7 @@
 import logging
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import sys
@@ -344,7 +345,7 @@ def _execute_with_saved_config(
         console.print("✅ Using saved configuration", style="dim")
         cmd = ["agents-cli", *args]
 
-    logging.debug(f"Executing command: {' '.join(cmd)}")
+    logging.debug(f"Executing command: {shlex.join(cmd)}")
 
     # Set env var to prevent infinite loop in nested execution
     env = os.environ.copy()
@@ -372,6 +373,7 @@ def _execute_with_saved_config(
 
 
 def check_and_execute_with_saved_config(
+    *,
     project_dir: pathlib.Path,
     auto_approve: bool = False,
     cli_overrides: dict[str, Any] | None = None,
@@ -784,6 +786,7 @@ def _backfill_create_params_from_config(
 
 
 def _run_smart_merge(
+    *,
     project_dir: pathlib.Path,
     project_config: dict[str, Any],
     cli_overrides: dict[str, Any] | None,
@@ -932,11 +935,11 @@ def _run_smart_merge(
 
         # Apply changes
         counts = apply_changes(
-            groups,
-            project_dir,
-            new_template_project,
-            auto_approve,
-            dry_run,
+            groups=groups,
+            project_dir=project_dir,
+            new_template_dir=new_template_project,
+            auto_approve=auto_approve,
+            dry_run=dry_run,
             prefer_new=prefer_new,
             interactive=interactive,
         )
@@ -1048,6 +1051,7 @@ def _run_smart_merge(
 def enhance(
     ctx: click.Context,
     template_path: pathlib.Path,
+    *,
     name: str | None,
     deployment_target: str | None,
     cicd_runner: str | None,
@@ -1135,7 +1139,7 @@ def enhance(
             elif interactive:
                 # Show saved config, prompt y/customize
                 saved_config_result = check_and_execute_with_saved_config(
-                    current_dir,
+                    project_dir=current_dir,
                     auto_approve=auto_approve,
                     cli_overrides=cli_override_args,
                     dry_run=dry_run,
@@ -1160,7 +1164,7 @@ def enhance(
                     return
                 # Use saved config subprocess
                 if check_and_execute_with_saved_config(
-                    current_dir,
+                    project_dir=current_dir,
                     auto_approve=auto_approve,
                     cli_overrides=cli_override_args,
                     interactive=interactive,
@@ -1171,11 +1175,11 @@ def enhance(
             # comparison if user kept all defaults (overrides is empty dict)
             effective_overrides = overrides if overrides else None
             if _run_smart_merge(
-                current_dir,
-                project_config,
-                effective_overrides,
-                auto_approve,
-                dry_run,
+                project_dir=current_dir,
+                project_config=project_config,
+                cli_overrides=effective_overrides,
+                auto_approve=auto_approve,
+                dry_run=dry_run,
                 prefer_new=prefer_new,
                 interactive=interactive,
             ):
@@ -1199,7 +1203,7 @@ def enhance(
         if not is_saved_config_subprocess:
             # --force: try saved config subprocess
             saved_config_result = check_and_execute_with_saved_config(
-                current_dir,
+                project_dir=current_dir,
                 auto_approve=auto_approve,
                 cli_overrides=cli_override_args,
                 force=force,
@@ -1215,10 +1219,10 @@ def enhance(
             project_config = get_project_acli_config(current_dir)
             if project_config:
                 if _run_smart_merge(
-                    current_dir,
-                    project_config,
-                    None,
-                    auto_approve,
+                    project_dir=current_dir,
+                    project_config=project_config,
+                    cli_overrides=None,
+                    auto_approve=auto_approve,
                     dry_run=False,
                     prefer_new=prefer_new,
                     interactive=interactive,

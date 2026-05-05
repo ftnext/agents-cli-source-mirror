@@ -88,7 +88,7 @@ def _find_installed_skills() -> dict[str, str]:
 
     # Slow path: ask npx skills for actual install locations
     try:
-        from google.agents.cli._project import get_npx_path
+        from google.agents.cli._tools import get_npx_path
 
         npx_path = get_npx_path()
         proc = subprocess.run(
@@ -124,7 +124,7 @@ def get_installed_skills() -> list[dict] | None:
     import subprocess
 
     try:
-        from google.agents.cli._project import get_npx_path
+        from google.agents.cli._tools import get_npx_path
 
         npx_path = get_npx_path()
         result = subprocess.run(

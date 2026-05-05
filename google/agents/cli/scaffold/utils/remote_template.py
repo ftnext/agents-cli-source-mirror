@@ -16,6 +16,7 @@ import logging
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -198,7 +199,7 @@ def fetch_remote_template(
         ]
 
         logging.debug(
-            f"Attempting to clone remote template with Git: {' '.join(clone_cmd)}"
+            f"Attempting to clone remote template with Git: {shlex.join(clone_cmd)}"
         )
         # GIT_TERMINAL_PROMPT=0 prevents git from prompting for credentials
         result = subprocess.run(

@@ -17,6 +17,7 @@ import logging
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -243,7 +244,7 @@ def _add_dependencies(
         return True
 
     console = Console()
-    deps_str = " ".join(f"'{dep}'" for dep in dependencies)
+    deps_str = shlex.join(dependencies)
 
     should_add = True
     if interactive:
@@ -1061,6 +1062,7 @@ app = App(root_agent=root_agent, name="{agent_directory}")
 
 
 def process_template(
+    *,
     agent_name: str,
     template_dir: pathlib.Path,
     project_name: str,

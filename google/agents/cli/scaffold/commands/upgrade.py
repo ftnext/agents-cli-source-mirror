@@ -263,11 +263,11 @@ def upgrade(
 
         # Apply changes
         counts = apply_changes(
-            groups,
-            project_dir,
-            new_template_project,
-            auto_approve,
-            dry_run,
+            groups=groups,
+            project_dir=project_dir,
+            new_template_dir=new_template_project,
+            auto_approve=auto_approve,
+            dry_run=dry_run,
             interactive=interactive,
         )
 

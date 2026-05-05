@@ -23,7 +23,8 @@ from rich.console import Console
 
 from google.agents.cli.__init__ import __version__
 from google.agents.cli._click import patch_source_in_help
-from google.agents.cli._project import is_project_moved, require_tool
+from google.agents.cli._project import is_project_moved
+from google.agents.cli._tools import require_tool
 from google.agents.cli.data.cmd_data_ingestion import cmd_data_ingestion
 from google.agents.cli.deploy.cmd_deploy import cmd_deploy
 from google.agents.cli.dev.cmd_install import cmd_install

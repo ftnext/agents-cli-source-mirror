@@ -26,11 +26,12 @@ export and persist the environment variable themselves.
 
 import enum
 import os
-import shutil
 import subprocess
 import webbrowser
 
 import click
+
+from google.agents.cli._tools import ToolNotFoundError, get_gcloud_path
 
 
 class AuthType(enum.Enum):
@@ -83,24 +84,16 @@ def _setup_google_cloud_adc():
         Dict with project and account info on success, or None
         if the user needs to retry after manual setup.
     """
-    import google.auth
-    import google.auth.exceptions
-
-    # First, check if ADC already exists
-    try:
-        _credentials, project = google.auth.default()
-        account = _get_gcloud_account()
-        return {"project": project, "account": account}
-    except google.auth.exceptions.DefaultCredentialsError:
-        pass
 
     # No ADC found — guide the user
     click.echo()
-    click.echo("  No Application Default Credentials found.")
+    click.echo("  No valid Application Default Credentials found.")
     click.echo()
 
     # Check if gcloud is installed
-    if not shutil.which("gcloud"):
+    try:
+        gcloud_path = get_gcloud_path()
+    except ToolNotFoundError:
         click.echo("  The Google Cloud CLI (gcloud) is not installed.")
         click.echo()
         click.echo("  To install it:")
@@ -145,7 +138,7 @@ def _setup_google_cloud_adc():
 
     try:
         result = subprocess.run(
-            ["gcloud", "auth", "application-default", "login"],
+            [gcloud_path, "auth", "application-default", "login"],
             timeout=120,
         )
         if result.returncode != 0:
@@ -165,16 +158,14 @@ def _setup_google_cloud_adc():
         return None
 
     # Verify ADC is now available
-    try:
-        _credentials, project = google.auth.default()
-        account = _get_gcloud_account()
-        return {"project": project, "account": account}
-    except google.auth.exceptions.DefaultCredentialsError:
+    if not _check_valid_adc():
         click.secho(
             "  Authentication completed but credentials could not be verified.",
             fg="red",
         )
         return None
+
+    return {"project": _get_adc_project(), "account": _get_gcloud_account()}
 
 
 def _get_gcloud_account():
@@ -286,8 +277,8 @@ def run_auth_step(show_header=True):
     Returns:
         True if authenticated (or skipped), False on hard failure.
     """
-    # Fast check (env vars only, no slow ADC probe)
-    authed, display = is_authenticated(check_adc=False)
+    # Check if already authenticated
+    authed, display = is_authenticated()
     if authed:
         if show_header:
             click.secho("Authentication", bold=True)
@@ -356,12 +347,8 @@ def run_auth_step(show_header=True):
 # ── Shared Helpers ──────────────────────────────────────────────────
 
 
-def is_authenticated(check_adc=True):
+def is_authenticated():
     """Check if valid credentials exist by inspecting env vars and ADC.
-
-    Args:
-        check_adc: Whether to check Application Default Credentials.
-            Set to False for fast checks (env vars only).
 
     Returns:
         Tuple of (bool, str_or_None) — authenticated status and
@@ -375,28 +362,49 @@ def is_authenticated(check_adc=True):
     if os.environ.get("GOOGLE_API_KEY"):
         return True, "Express Mode (GOOGLE_API_KEY)"
 
-    if not check_adc:
+    # Check ADC validity
+    if not _check_valid_adc():
         return False, None
 
-    # Check ADC (can be slow — metadata server, file lookups)
+    # Get project and account, to display
+    project = _get_adc_project()
+    account = _get_gcloud_account()
+    if account:
+        display = account
+        if project:
+            display += f" ({project})"
+    elif project:
+        display = f"Google Cloud ({project})"
+    else:
+        display = "Google Cloud"
+    return True, display
+
+
+def _check_valid_adc():
+    # google.auth.default() doesnt' actually validate credentials
+    # until you try to refresh them. That refresh can be extremely slow
+    # if credentials are missing or invalid, so we use the gcloud version
+    # which goes much faster.
     try:
-        import google.auth
+        subprocess.run(
+            ["gcloud", "auth", "application-default", "print-access-token", "--quiet"],
+            check=True,
+            capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
-        _credentials, project = google.auth.default()
-        account = _get_gcloud_account()
-        if account:
-            display = account
-            if project:
-                display += f" ({project})"
-        elif project:
-            display = f"Google Cloud ({project})"
-        else:
-            display = "Google Cloud"
-        return True, display
+
+def _get_adc_project():
+    """Return the ADC project"""
+    import google.auth
+
+    try:
+        _, project = google.auth.default()
+        return project
     except Exception:
-        pass
-
-    return False, None
+        return None
 
 
 # ── Token Helpers ──────────────────────────────────────────────────

@@ -16,76 +16,9 @@
 
 from __future__ import annotations
 
-import os
-import shutil
 import subprocess
-from pathlib import Path
 
-# Cache for gcloud command path (resolved once for performance)
-_gcloud_cmd_cache: str | None = None
-
-
-def get_gcloud_cmd() -> str:
-    """Get the gcloud command path, with caching for performance.
-
-    Uses shutil.which() to find the full path to gcloud on all platforms.
-    On Windows, also checks common installation paths if shutil.which() fails
-    (which can happen when PATH contains directories with spaces).
-    Falls back to "gcloud" if not found anywhere.
-
-    Returns:
-        Full path to gcloud executable, or "gcloud" as fallback
-    """
-    global _gcloud_cmd_cache
-    if _gcloud_cmd_cache is not None:
-        return _gcloud_cmd_cache
-
-    # Try shutil.which() first (works on most systems)
-    gcloud_cmd = shutil.which("gcloud")
-    if gcloud_cmd:
-        _gcloud_cmd_cache = gcloud_cmd
-        return _gcloud_cmd_cache
-
-    # On Windows, manually check common installation paths
-    # (shutil.which can fail when PATH has spaces in directory names)
-    # Use environment variables for robustness (Windows may not be on C:/)
-    if os.name == "nt":
-        local_app_data = Path(
-            os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")
-        )
-        program_files = Path(os.environ.get("ProgramFiles", "C:/Program Files"))
-        program_files_x86 = Path(
-            os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")
-        )
-
-        possible_paths = [
-            local_app_data
-            / "Google"
-            / "Cloud SDK"
-            / "google-cloud-sdk"
-            / "bin"
-            / "gcloud.cmd",
-            program_files_x86
-            / "Google"
-            / "Cloud SDK"
-            / "google-cloud-sdk"
-            / "bin"
-            / "gcloud.cmd",
-            program_files
-            / "Google"
-            / "Cloud SDK"
-            / "google-cloud-sdk"
-            / "bin"
-            / "gcloud.cmd",
-        ]
-        for path in possible_paths:
-            if path.exists():
-                _gcloud_cmd_cache = str(path)
-                return _gcloud_cmd_cache
-
-    # Fallback to just "gcloud" and hope it works
-    _gcloud_cmd_cache = "gcloud"
-    return _gcloud_cmd_cache
+from google.agents.cli._tools import get_gcloud_path
 
 
 def run_gcloud_command(
@@ -98,7 +31,6 @@ def run_gcloud_command(
 
     Automatically handles:
     - Resolving the full path to gcloud executable
-    - Using shell=True on Windows for .cmd files
 
     Args:
         args: Command arguments (without 'gcloud' prefix, e.g., ['config', 'get-value', 'account'])
@@ -109,12 +41,13 @@ def run_gcloud_command(
     Returns:
         CompletedProcess instance
     """
-    cmd = [get_gcloud_cmd(), *args]
+    cmd = [get_gcloud_path(), *args]
     return subprocess.run(
         cmd,
         check=check,
         capture_output=capture_output,
         text=True,
         timeout=timeout,
-        shell=(os.name == "nt"),
+        encoding="utf-8",
+        errors="replace",
     )

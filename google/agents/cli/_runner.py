@@ -24,6 +24,7 @@ import click
 
 def run(
     args: list[str],
+    *,
     cwd: str | None = None,
     env: dict | None = None,
     capture: bool = False,
@@ -31,6 +32,7 @@ def run(
     check: bool = True,
     check_err_msg: str | None = None,
     input_data: bytes | None = None,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess, streaming output by default.
 
@@ -66,6 +68,7 @@ def run(
             cwd=cwd,
             input=input_data,
             env=run_env,
+            timeout=timeout,
         )
     else:
         result = subprocess.run(
@@ -75,6 +78,7 @@ def run(
             cwd=cwd,
             input=input_data,
             env=run_env,
+            timeout=timeout,
         )
 
     if check and result.returncode != 0:

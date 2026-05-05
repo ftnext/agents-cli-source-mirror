@@ -17,6 +17,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -27,7 +28,7 @@ import backoff
 import click
 from rich.prompt import IntPrompt, Prompt
 
-from google.agents.cli.scaffold.utils.command import get_gcloud_cmd
+from google.agents.cli._tools import get_gcloud_path, get_gh_path, get_terraform_path
 
 
 def setup_git_provider(non_interactive: bool = False) -> str:
@@ -72,7 +73,9 @@ def setup_repository_name(
     click.secho("\n> Repository Configuration", bold=True, fg="blue")
 
     # Get current GitHub username
-    result = run_command(["gh", "api", "user", "--jq", ".login"], capture_output=True)
+    result = run_command(
+        [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
+    )
     github_username = result.stdout.strip()
 
     # Get repository name
@@ -109,7 +112,7 @@ def create_github_connection(
     )
 
     def try_create_connection() -> subprocess.CompletedProcess[str]:
-        gcloud_cmd = get_gcloud_cmd()
+        gcloud_cmd = get_gcloud_path()
         cmd = [
             gcloud_cmd,
             "builds",
@@ -122,10 +125,9 @@ def create_github_connection(
         ]
 
         # Display the command being run
-        click.echo(f"\n🔄 Running command: {' '.join(cmd)}")
+        click.echo(f"\n🔄 Running command: {shlex.join(cmd)}")
 
         # Use Popen to get control over stdin
-        # On Windows, gcloud.cmd requires shell=True
         process = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -133,7 +135,7 @@ def create_github_connection(
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            shell=(os.name == "nt"),
+            errors="replace",
         )
 
         # Send 'y' followed by enter key to handle both the API enablement prompt and any other prompts
@@ -176,7 +178,7 @@ def create_github_connection(
         try:
             result = run_command(
                 [
-                    "gcloud",
+                    get_gcloud_path(),
                     "builds",
                     "connections",
                     "describe",
@@ -323,7 +325,7 @@ def require_apis_enabled(project_id: str, apis: list[str]) -> None:
             # Check if API is enabled
             result = run_command(
                 [
-                    "gcloud",
+                    get_gcloud_path(),
                     "services",
                     "list",
                     f"--project={project_id}",
@@ -363,28 +365,17 @@ def require_apis_enabled(project_id: str, apis: list[str]) -> None:
 )
 def run_command(
     cmd: list[str] | str,
+    *,
     check: bool = True,
     cwd: Path | None = None,
     capture_output: bool = False,
-    shell: bool = False,
     input: str | None = None,
     env_vars: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a command and display it to the user.
-
-    Automatically handles Windows compatibility for gcloud commands by:
-    - Resolving the full path to gcloud executable (via command.py)
-    - Using shell=True on Windows for .cmd files
-    """
-    # Handle gcloud commands for Windows compatibility
-    if isinstance(cmd, list) and len(cmd) > 0 and cmd[0] == "gcloud":
-        cmd = [get_gcloud_cmd(), *cmd[1:]]
-        # On Windows, gcloud.cmd requires shell=True
-        if os.name == "nt":
-            shell = True
+    """Run a command and display it to the user."""
 
     # Format command for display
-    cmd_str = cmd if isinstance(cmd, str) else " ".join(cmd)
+    cmd_str = cmd if isinstance(cmd, str) else shlex.join(cmd)
     click.echo(f"\n🔄 Running command: {cmd_str}")
     if cwd:
         click.echo(f"📂 In directory: {cwd}")
@@ -402,9 +393,10 @@ def run_command(
         cwd=cwd,
         capture_output=capture_output,
         text=True,
-        shell=shell,
         input=input,
         env=env,
+        encoding="utf-8",
+        errors="replace",
     )
 
     # Display output if captured
@@ -424,7 +416,9 @@ def is_github_authenticated() -> bool:
     """
     try:
         # Try to get the current user, which will fail if not authenticated
-        result = run_command(["gh", "auth", "status"], check=False, capture_output=True)
+        result = run_command(
+            [get_gh_path(), "auth", "status"], check=False, capture_output=True
+        )
         return result.returncode == 0
     except Exception:
         return False
@@ -455,7 +449,7 @@ def handle_github_authentication(interactive: bool = True) -> None:
     try:
         if choice == "1":
             # Browser-based authentication
-            run_command(["gh", "auth", "login", "--web"])
+            run_command([get_gh_path(), "auth", "login", "--web"])
         else:
             # Token-based authentication
             token = click.prompt(
@@ -495,7 +489,7 @@ def create_github_repository(repository_owner: str, repository_name: str) -> Non
         # Check if repo exists
         result = run_command(
             [
-                "gh",
+                get_gh_path(),
                 "repo",
                 "view",
                 f"{repository_owner}/{repository_name}",
@@ -513,7 +507,7 @@ def create_github_repository(repository_owner: str, repository_name: str) -> Non
             )
             run_command(
                 [
-                    "gh",
+                    get_gh_path(),
                     "repo",
                     "create",
                     f"{repository_owner}/{repository_name}",
@@ -633,7 +627,13 @@ class E2EDeployment:
         # Ensure bucket exists and is accessible
         try:
             result = run_command(
-                ["gcloud", "storage", "buckets", "describe", f"gs://{bucket_name}"],
+                [
+                    get_gcloud_path(),
+                    "storage",
+                    "buckets",
+                    "describe",
+                    f"gs://{bucket_name}",
+                ],
                 check=False,
                 capture_output=True,
             )
@@ -642,7 +642,7 @@ class E2EDeployment:
                 click.echo(f"\n📦 Creating Terraform state bucket: {bucket_name}")
                 run_command(
                     [
-                        "gcloud",
+                        get_gcloud_path(),
                         "storage",
                         "buckets",
                         "create",
@@ -654,7 +654,7 @@ class E2EDeployment:
 
                 run_command(
                     [
-                        "gcloud",
+                        get_gcloud_path(),
                         "storage",
                         "buckets",
                         "update",
@@ -720,13 +720,14 @@ class E2EDeployment:
         # Initialize and apply Terraform for each directory
         for tf_dir, var_file in tf_configs:
             click.echo(f"\n🔧 Initializing Terraform in {tf_dir}...")
+            terraform_path = get_terraform_path()
             if local_state:
-                run_command(["terraform", "init", "-backend=false"], cwd=tf_dir)
+                run_command([terraform_path, "init", "-backend=false"], cwd=tf_dir)
             else:
-                run_command(["terraform", "init"], cwd=tf_dir)
+                run_command([terraform_path, "init"], cwd=tf_dir)
 
             click.echo(f"\n🚀 Applying Terraform configuration in {tf_dir}...")
             run_command(
-                ["terraform", "apply", f"-var-file={var_file}", "-auto-approve"],
+                [terraform_path, "apply", f"-var-file={var_file}", "-auto-approve"],
                 cwd=tf_dir,
             )

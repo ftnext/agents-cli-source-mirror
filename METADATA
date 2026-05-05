@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: google-agents-cli
-Version: 0.1.1
+Version: 0.1.2
 Summary: Agents CLI — Agent Development Lifecycle toolchain for ADK
 Author-email: Google LLC <agents-cli-dev-pypi@google.com>
 Requires-Python: >=3.11
@@ -22,10 +22,14 @@ Requires-Dist: a2a-sdk~=0.3.22
 Requires-Dist: ruff ; extra == "lint"
 Requires-Dist: ty ; extra == "lint"
 Requires-Dist: codespell ; extra == "lint"
+Project-URL: documentation, https://google.github.io/agents-cli/
+Project-URL: homepage, https://github.com/google/agents-cli
+Project-URL: issues, https://github.com/google/agents-cli/issues
+Project-URL: releasenotes, https://github.com/google/agents-cli/blob/main/RELEASE_NOTES.md
 Provides-Extra: lint
 
 <div align="center">
-  <img src="docs/src/assets/logo_sm.png" alt="agents-cli logo" width="120" />
+  <img src="https://github.com/google/agents-cli/blob/main/docs/src/assets/logo_sm.png" alt="agents-cli logo" width="120" />
   <h1><code>agents-cli</code></h1>
   <p>The CLI and skills for building agents on Gemini Enterprise Agent Platform.</p>
 
@@ -36,6 +40,7 @@ Provides-Extra: lint
     <a href="https://pypi.org/project/google-agents-cli/">PyPI</a> &nbsp;&nbsp;|&nbsp;&nbsp;
     <a href="https://github.com/google/agents-cli/issues">Issues</a> &nbsp;&nbsp;|&nbsp;&nbsp;
     <a href="https://google.github.io/agents-cli/">Docs</a> &nbsp;&nbsp;|&nbsp;&nbsp;
+    <a href="https://github.com/google/agents-cli/blob/main/RELEASE_NOTES.md">Release Notes</a> &nbsp;&nbsp;|&nbsp;&nbsp;
     <a href="https://github.com/google/agents-cli/stargazers">Star us</a>
   </p>
 </div>
@@ -152,7 +157,7 @@ See the [full tutorial](https://google.github.io/agents-cli/guide/quickstart-tut
 
 The Google Cloud agent stack that `agents-cli` builds on:
 
-![Architecture](docs/src/assets/architecture.png "Architecture")
+![Architecture](https://github.com/google/agents-cli/blob/main/docs/src/assets/architecture.png "Architecture")
 
 ## FAQ
 

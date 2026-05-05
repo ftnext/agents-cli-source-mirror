@@ -134,13 +134,13 @@ flattened AS (
   CROSS JOIN UNNEST(parts) AS part WITH OFFSET AS part_idx
 ),
 
--- Stage 1: Deduplicate within a trace — keep only the latest log entry
--- (Tool calls create multiple log entries with same trace but different timestamps)
+-- Stage 1: Deduplicate within a trace+span, keeping distinct spans
+-- (each LLM hop gets its own span_id).
 dedup_within_trace AS (
   SELECT
     *,
     ROW_NUMBER() OVER (
-      PARTITION BY conversation_id, trace, message_type, role, message_idx, part_idx
+      PARTITION BY conversation_id, trace, span_id, message_type, role, message_idx, part_idx
       ORDER BY timestamp DESC
     ) AS row_num
   FROM flattened

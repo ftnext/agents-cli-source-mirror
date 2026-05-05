@@ -18,8 +18,9 @@ from pathlib import Path
 
 import click
 
-from google.agents.cli._project import chdir_project_root, require_tool
+from google.agents.cli._project import chdir_project_root
 from google.agents.cli._runner import run
+from google.agents.cli._tools import require_tool
 
 
 @click.group("infra")

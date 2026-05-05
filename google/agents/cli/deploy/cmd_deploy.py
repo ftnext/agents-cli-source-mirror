@@ -14,6 +14,7 @@
 
 """agents-cli deploy command — deploy the agent."""
 
+import shlex
 import subprocess
 import sys
 
@@ -25,9 +26,9 @@ from google.agents.cli._project import (
     check_cli_version,
     read_project_config,
     require_deployment_target,
-    require_tool,
 )
 from google.agents.cli._runner import run
+from google.agents.cli._tools import require_tool
 from google.agents.cli.deploy._utils import parse_key_value_pairs
 
 
@@ -59,7 +60,7 @@ def check_agent_runtime_operation(*args, **kwargs):
     return _check_agent_runtime_operation(*args, **kwargs)
 
 
-@click.command("deploy", context_settings={"ignore_unknown_options": True})
+@click.command("deploy")
 @click.option("--project", default=None, help="GCP project ID.")
 @click.option("--region", default=None, help="GCP region.")
 @click.option("--secrets", default=None, help="Comma-separated ENV=SECRET pairs.")
@@ -129,8 +130,8 @@ def check_agent_runtime_operation(*args, **kwargs):
     default=False,
     help="Skip project confirmation prompt.",
 )
-@click.argument("extra_args", nargs=-1, type=click.UNPROCESSED)
 def cmd_deploy(
+    *,
     project,
     region,
     secrets,
@@ -148,7 +149,6 @@ def cmd_deploy(
     status,
     interactive,
     no_confirm_project,
-    extra_args,
 ):
     """Deploy the agent.
 
@@ -159,8 +159,6 @@ def cmd_deploy(
       gke          → terraform + docker build + kubectl apply
 
     \b
-    Cloud Run accepts extra arguments, forwarded to gcloud run deploy.
-    Run 'gcloud run deploy --help' for all available options.
 
     \b
     Use --list to show existing deployments:
@@ -240,23 +238,6 @@ def cmd_deploy(
         )
         service_name = cfg.project_name or "agent"
 
-        # Build set of CLI-managed args for conflict detection
-        managed_args = {
-            "--source",
-            "--image",
-            "--project",
-            "--memory",
-            "--update-env-vars",
-        }
-        if region:
-            managed_args.add("--region")
-        if port:
-            managed_args.add("--port")
-        if service_account:
-            managed_args.add("--service-account")
-
-        _validate_gcloud_extra_args(extra_args, managed_args)
-
         args = ["gcloud", "beta", "run", "deploy", service_name]
         if project:
             args.extend(["--project", project])
@@ -306,25 +287,19 @@ def cmd_deploy(
         env_var_str = ",".join(f"{k}={v}" for k, v in env_var_map.items())
         args.extend(["--update-env-vars", env_var_str])
 
-        # Merge labels: combine user --labels= with created-by=adk
-        user_labels, remaining_args = _extract_labels(extra_args)
-        all_labels = ["created-by=adk", *user_labels]
-        args.extend(["--labels", ",".join(all_labels)])
-
-        # Passthrough remaining args
-        args.extend(remaining_args)
+        # Add default labels
+        args.extend(["--labels", "created-by=adk"])
 
         if no_wait:
             args.append("--async")
 
+        cmd_str = shlex.join(str(a) for a in args)
         if dry_run:
-            click.echo(f"  Would run: {' '.join(str(a) for a in args)}")
+            click.echo(f"  Would run: {cmd_str}")
             return
-
-        # Stream stdout and stderr to terminal in real time, capturing stderr for error detection
-        cmd_str = " ".join(str(a) for a in args)
         click.secho(f"  ▸ {cmd_str}", fg="cyan", dim=True)
 
+        # Stream stdout and stderr to terminal in real time, capturing stderr for error detection
         process = subprocess.Popen(
             args, stdout=sys.stdout, stderr=subprocess.PIPE, text=True
         )
@@ -357,38 +332,20 @@ def cmd_deploy(
     elif cfg.deployment_target == "gke":
         if no_wait:
             raise click.ClickException("--no-wait is not supported for GKE deployments.")
-        _deploy_gke(cfg, project, region, image, cluster_name, dry_run)
+        _deploy_gke(
+            cfg=cfg,
+            project=project,
+            region=region,
+            image=image,
+            cluster_name=cluster_name,
+            dry_run=dry_run,
+        )
 
     else:
         raise click.ClickException(
             f"Unknown deployment target: {cfg.deployment_target}. "
             "Set [tool.agents-cli] deployment_target in pyproject.toml."
         )
-
-
-def _validate_gcloud_extra_args(extra_args, managed_args):
-    """Reject extra args that conflict with CLI-managed args."""
-    if not extra_args:
-        return
-    user_arg_names = {arg.split("=")[0] for arg in extra_args if arg.startswith("--")}
-    conflicts = user_arg_names.intersection(managed_args)
-    if conflicts:
-        conflict_list = ", ".join(f"'{a}'" for a in sorted(conflicts))
-        raise click.ClickException(
-            f"The argument(s) {conflict_list} conflict with automatic configuration. "
-            "These are set automatically — remove them from your command."
-        )
-
-
-def _extract_labels(extra_args):
-    """Separate --labels= from other args, return (label_values, remaining_args)."""
-    labels, remaining = [], []
-    for arg in extra_args:
-        if arg.startswith("--labels="):
-            labels.append(arg[len("--labels=") :])
-        else:
-            remaining.append(arg)
-    return labels, remaining
 
 
 def _enable_cloud_run_apis(project: str | None) -> None:
@@ -486,7 +443,7 @@ def _try_resolve_gcp_project() -> str | None:
     return None
 
 
-def _deploy_gke(cfg, project, region, image, cluster_name, dry_run):
+def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
     """GKE deployment: single linear flow with conditional steps.
 
     When ``image`` is provided (CI/CD mode), skips terraform and docker build.
