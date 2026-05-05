@@ -15,7 +15,9 @@
 """Version checking utilities for the CLI."""
 
 import logging
+import time
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import requests
 from packaging import version as pkg_version
@@ -24,6 +26,26 @@ from rich.console import Console
 console = Console()
 
 PACKAGE_NAME = "google-agents-cli"
+_UPDATE_CHECK_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
+_UPDATE_CHECK_STAMP = Path.home() / ".agents" / ".acli_update_check"
+
+
+def _update_check_is_due() -> bool:
+    """Return True if enough time has elapsed since the last check."""
+    try:
+        last = float(_UPDATE_CHECK_STAMP.read_text().strip())
+        return (time.time() - last) > _UPDATE_CHECK_INTERVAL
+    except (OSError, ValueError):
+        return True
+
+
+def _record_update_check() -> None:
+    """Write the current timestamp to the stamp file."""
+    try:
+        _UPDATE_CHECK_STAMP.parent.mkdir(parents=True, exist_ok=True)
+        _UPDATE_CHECK_STAMP.write_text(str(time.time()))
+    except OSError:
+        pass
 
 
 def get_current_version() -> str:
@@ -62,8 +84,14 @@ def check_for_updates() -> tuple[bool, str, str]:
 
 def display_update_message() -> None:
     """Check for updates and display a message if an update is available."""
+    if not _update_check_is_due():
+        return
+
     try:
         needs_update, current, latest = check_for_updates()
+
+        # We only record the check if we successfully queried it
+        _record_update_check()
 
         if needs_update:
             console.print(

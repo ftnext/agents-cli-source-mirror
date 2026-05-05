@@ -28,11 +28,35 @@ from google.agents.cli._project import (
     require_tool,
 )
 from google.agents.cli._runner import run
-from google.agents.cli.deploy.agent_runtime import (
-    check_agent_runtime_operation,
-    deploy_agent_runtime,
-    parse_key_value_pairs,
-)
+from google.agents.cli.deploy._utils import parse_key_value_pairs
+
+
+def deploy_agent_runtime(*args, **kwargs):
+    """Lazy-loading wrapper for deploy_agent_runtime.
+
+    The underlying module imports heavy Google Cloud and Vertex AI SDKs.
+    We defer the import until execution to keep the CLI's startup fast,
+    while keeping this wrapper at the module level to support unit test patching.
+    """
+    from google.agents.cli.deploy.agent_runtime import (
+        deploy_agent_runtime as _deploy_agent_runtime,
+    )
+
+    return _deploy_agent_runtime(*args, **kwargs)
+
+
+def check_agent_runtime_operation(*args, **kwargs):
+    """Lazy-loading wrapper for check_agent_runtime_operation.
+
+    The underlying module imports heavy Google Cloud and Vertex AI SDKs.
+    We defer the import until execution to keep the CLI's startup fast,
+    while keeping this wrapper at the module level to support unit test patching.
+    """
+    from google.agents.cli.deploy.agent_runtime import (
+        check_agent_runtime_operation as _check_agent_runtime_operation,
+    )
+
+    return _check_agent_runtime_operation(*args, **kwargs)
 
 
 @click.command("deploy", context_settings={"ignore_unknown_options": True})

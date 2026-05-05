@@ -24,7 +24,6 @@ from urllib.parse import urlparse
 
 import click
 import requests
-import vertexai
 from google.auth import default
 from packaging import version
 from rich.console import Console
@@ -484,6 +483,8 @@ def get_agent_runtime_metadata(agent_runtime_id: str) -> tuple[str | None, str |
     location = parts[3]
 
     try:
+        import vertexai
+
         client = vertexai.Client(project=project_id, location=location)
         agent_runtime = client.agent_engines.get(name=agent_runtime_id)
 
