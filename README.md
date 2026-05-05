@@ -18,6 +18,14 @@ For each upstream release:
 4. Commit the contents to this repository, overwriting the previous version.
 5. Tag the commit `vX.Y.Z`.
 
+Steps 1–3 and the file replacement portion of step 4 are automated by `scripts/import-wheel.sh`:
+
+```sh
+./scripts/import-wheel.sh X.Y.Z
+```
+
+The script then prints the suggested `git commit` (with provenance) and `git tag vX.Y.Z` commands to run.
+
 Layout in this repository:
 
 - `google/` — the Python package as shipped in the wheel.
