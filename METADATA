@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: google-agents-cli
+Version: 0.1.0
+Summary: Agents CLI — Agent Development Lifecycle toolchain for ADK
+Author-email: Google LLC <agents-cli-dev-pypi@google.com>
+Requires-Python: >=3.11
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+License-File: LICENSE
+Requires-Dist: click>=8.1.8,<9
+Requires-Dist: PyYAML>=6.0.2,<7
+Requires-Dist: cookiecutter>=2.6.0,<3
+Requires-Dist: jinja2>=3.1.0
+Requires-Dist: google-cloud-aiplatform>=1.120.0
+Requires-Dist: google-cloud-resource-manager>=1.12.0
+Requires-Dist: google-auth[pyopenssl]>=2.47.0
+Requires-Dist: rich>=13.7.0
+Requires-Dist: backoff>=2.2.1
+Requires-Dist: requests>=2.31.0
+Requires-Dist: a2a-sdk~=0.3.22
+Requires-Dist: ruff ; extra == "lint"
+Requires-Dist: ty ; extra == "lint"
+Requires-Dist: codespell ; extra == "lint"
+Provides-Extra: lint

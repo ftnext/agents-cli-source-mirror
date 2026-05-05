@@ -1,0 +1,487 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Authentication module for agents-cli.
+
+Supports 3 authentication methods:
+- Google Cloud credentials (Application Default Credentials)
+- Gemini API Key from AI Studio (GEMINI_API_KEY)
+- Express Mode / Vertex AI API key (GOOGLE_API_KEY)
+
+Authentication is based on environment variables and gcloud ADC.
+For API key methods, we print instructions for the user to
+export and persist the environment variable themselves.
+"""
+
+import enum
+import os
+import shutil
+import subprocess
+import webbrowser
+
+import click
+
+
+class AuthType(enum.Enum):
+    """Supported authentication methods."""
+
+    GOOGLE_CLOUD = "google_cloud"
+    GEMINI_API_KEY = "gemini_api_key"
+    EXPRESS_MODE = "express_mode"
+
+
+def _api_key_instructions(var_name):
+    """Print instructions for the user to export the API_KEY env var.
+
+    Args:
+        var_name: Environment variable name (e.g. GEMINI_API_KEY).
+    """
+    click.echo()
+    click.echo("  To use this API key in your current session, run:")
+    click.echo()
+    click.secho(f'    export {var_name}="YOUR_API_KEY"', bold=True)
+    click.echo()
+    click.echo(
+        "  To persist this variable across sessions, you can add it to your shell profile."
+    )
+    click.echo("  For example, add the export command above to your shell's startup file")
+    click.echo("  (e.g., ~/.bashrc, ~/.zshrc, or ~/.profile).")
+    click.echo()
+    click.echo(
+        "  If you create an ADK project, you can also store the API key under .env in the agent folder."
+    )
+    click.echo()
+    click.secho(
+        "  ⚠️  Warning: Be aware that when you export API keys or service account paths in\n"
+        "  your shell configuration file, any process launched from that shell can read them.",
+        fg="yellow",
+    )
+    click.echo()
+
+
+# ── Google Cloud (ADC) ──────────────────────────────────────────────
+
+
+def _setup_google_cloud_adc():
+    """Guide the user through Google Cloud ADC setup.
+
+    Checks for existing ADC. If not found, checks for gcloud CLI
+    and offers to run ``gcloud auth application-default login``.
+
+    Returns:
+        Dict with project and account info on success, or None
+        if the user needs to retry after manual setup.
+    """
+    import google.auth
+    import google.auth.exceptions
+
+    # First, check if ADC already exists
+    try:
+        _credentials, project = google.auth.default()
+        account = _get_gcloud_account()
+        return {"project": project, "account": account}
+    except google.auth.exceptions.DefaultCredentialsError:
+        pass
+
+    # No ADC found — guide the user
+    click.echo()
+    click.echo("  No Application Default Credentials found.")
+    click.echo()
+
+    # Check if gcloud is installed
+    if not shutil.which("gcloud"):
+        click.echo("  The Google Cloud CLI (gcloud) is not installed.")
+        click.echo()
+        click.echo("  To install it:")
+        click.echo()
+        click.secho(
+            "    https://cloud.google.com/sdk/docs/install",
+            fg="cyan",
+        )
+        click.echo()
+        click.echo("  After installing, run:")
+        click.echo()
+        click.secho(
+            "    gcloud auth application-default login",
+            bold=True,
+        )
+        click.echo()
+        click.echo("  Then re-run setup.")
+        return None
+
+    # gcloud is installed — offer to run login
+    click.echo(
+        "  This will open a browser window to authenticate with your Google account."
+    )
+    click.echo()
+
+    if not click.confirm(
+        "  Run 'gcloud auth application-default login' now",
+        default=True,
+    ):
+        click.echo()
+        click.echo("  Run this command manually when ready:")
+        click.echo()
+        click.secho(
+            "    gcloud auth application-default login",
+            bold=True,
+        )
+        return None
+
+    click.echo()
+    click.echo("  Opening browser for authentication...")
+    click.echo()
+
+    try:
+        result = subprocess.run(
+            ["gcloud", "auth", "application-default", "login"],
+            timeout=120,
+        )
+        if result.returncode != 0:
+            click.secho(
+                "  gcloud login did not complete successfully.",
+                fg="red",
+            )
+            return None
+    except subprocess.TimeoutExpired:
+        click.secho(
+            "  Authentication timed out. Run the command manually.",
+            fg="red",
+        )
+        return None
+    except Exception as e:
+        click.secho(f"  Failed to run gcloud: {e}", fg="red")
+        return None
+
+    # Verify ADC is now available
+    try:
+        _credentials, project = google.auth.default()
+        account = _get_gcloud_account()
+        return {"project": project, "account": account}
+    except google.auth.exceptions.DefaultCredentialsError:
+        click.secho(
+            "  Authentication completed but credentials could not be verified.",
+            fg="red",
+        )
+        return None
+
+
+def _get_gcloud_account():
+    """Get the active gcloud account, if available."""
+    try:
+        result = subprocess.run(
+            ["gcloud", "config", "get-value", "account"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+# ── Gemini API Key ──────────────────────────────────────────────────
+
+
+def _setup_gemini_api_key():
+    """Guide the user through Gemini API key setup.
+
+    Checks for GEMINI_API_KEY env var. If not set, opens AI Studio
+    in the browser and prompts the user to paste a key. Persists
+    the key by appending to the user's shell profile.
+
+    Returns:
+        Dict on success, or None if cancelled.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        return {"env_var": "GEMINI_API_KEY", "from_env": True}
+
+    # Not set — guide the user
+    click.echo()
+    click.echo("  GEMINI_API_KEY is not set in your environment.")
+    click.echo()
+
+    url = "https://aistudio.google.com/apikey"
+    click.echo("  We'll open Google AI Studio in your browser.")
+    click.echo("  Create or copy an API key, then come back here for more instructions.")
+    click.echo()
+    click.secho(f"  {url}", fg="cyan")
+    click.echo()
+
+    click.pause("  Press Enter to open the browser...")
+    webbrowser.open(url)
+
+    click.echo()
+
+    _api_key_instructions("GEMINI_API_KEY")
+
+    return None
+
+
+# ── Express Mode ────────────────────────────────────────────────────
+
+
+# TODO(b/495501218): Re-enable Express Mode in the login menu once launched.
+def _setup_express_mode():
+    """Guide the user through Vertex AI Express Mode setup.
+
+    Checks for GOOGLE_API_KEY env var. If not set, opens the
+    Vertex AI API keys page and prompts the user to paste a key.
+    Persists the key by appending to the user's shell profile.
+
+    Returns:
+        Dict on success, or None if cancelled.
+    """
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if api_key:
+        return {"env_var": "GOOGLE_API_KEY", "from_env": True}
+
+    # Not set — guide the user
+    click.echo()
+    click.echo("  GOOGLE_API_KEY is not set in your environment.")
+    click.echo()
+
+    url = "https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys"
+    click.echo("  We'll open the Vertex AI API keys page in your browser.")
+    click.echo("  Create or copy an API key, then come back here for more instructions.")
+    click.echo()
+    click.secho(f"  {url}", fg="cyan")
+    click.echo()
+
+    click.pause("  Press Enter to open the browser...")
+    webbrowser.open(url)
+
+    click.echo()
+
+    _api_key_instructions("GOOGLE_API_KEY")
+
+    return None
+
+
+def run_auth_step(show_header=True):
+    """Run the interactive authentication step.
+
+    Checks if already authenticated; if so, displays status.
+    Otherwise, presents auth method selection menu and guides
+    the user through the chosen method.
+
+    Args:
+        show_header: If True, print the "Authentication" header.
+            Set to False when the caller already provides a section header.
+
+    Returns:
+        True if authenticated (or skipped), False on hard failure.
+    """
+    # Fast check (env vars only, no slow ADC probe)
+    authed, display = is_authenticated(check_adc=False)
+    if authed:
+        if show_header:
+            click.secho("Authentication", bold=True)
+            click.echo()
+        click.secho(f"  Authenticated as {display}", fg="green")
+        click.echo()
+        return True
+
+    if show_header:
+        click.secho("Authentication", bold=True)
+        click.echo()
+    click.echo("  Choose an authentication method:")
+    click.echo()
+    click.secho("  1. Google Cloud (ADC)", bold=True)
+    click.echo("     Use gcloud Application Default Credentials.")
+    click.echo("     Best for: production workloads, full GCP access")
+    click.echo()
+    click.secho("  2. Gemini API Key", bold=True)
+    click.echo("     Enter an API key from AI Studio (aistudio.google.com).")
+    click.echo("     Best for: getting started, personal projects")
+    click.echo()
+    click.secho("  3. Skip", dim=True)
+    click.echo()
+
+    choice = click.prompt("  Enter your choice", type=click.IntRange(1, 3), default=1)
+
+    if choice == 3:
+        click.echo()
+        click.secho(
+            "  Skipped. Run 'agents-cli login' later to authenticate.",
+            fg="yellow",
+        )
+        click.echo()
+        return True
+
+    # Each method handles its own guided flow and UI
+    result = None
+    try:
+        if choice == 1:
+            result = _setup_google_cloud_adc()
+        elif choice == 2:
+            result = _setup_gemini_api_key()
+    except Exception as e:
+        click.echo()
+        click.secho(f"  {e}", fg="red")
+
+    click.echo()
+
+    if result is not None:
+        # Show success — re-read the saved display string
+        _, display = is_authenticated()
+        if display:
+            click.secho(f"  Authenticated as {display}", fg="green")
+        else:
+            click.secho("  Credentials saved", fg="green")
+    else:
+        click.secho(
+            "  Continuing without authentication. Run 'agents-cli login' later.",
+            fg="yellow",
+        )
+
+    click.echo()
+    return True
+
+
+# ── Shared Helpers ──────────────────────────────────────────────────
+
+
+def is_authenticated(check_adc=True):
+    """Check if valid credentials exist by inspecting env vars and ADC.
+
+    Args:
+        check_adc: Whether to check Application Default Credentials.
+            Set to False for fast checks (env vars only).
+
+    Returns:
+        Tuple of (bool, str_or_None) — authenticated status and
+        a human-readable display string.
+    """
+    # Check GEMINI_API_KEY (instant)
+    if os.environ.get("GEMINI_API_KEY"):
+        return True, "Gemini API Key (GEMINI_API_KEY)"
+
+    # Check GOOGLE_API_KEY (instant)
+    if os.environ.get("GOOGLE_API_KEY"):
+        return True, "Express Mode (GOOGLE_API_KEY)"
+
+    if not check_adc:
+        return False, None
+
+    # Check ADC (can be slow — metadata server, file lookups)
+    try:
+        import google.auth
+
+        _credentials, project = google.auth.default()
+        account = _get_gcloud_account()
+        if account:
+            display = account
+            if project:
+                display += f" ({project})"
+        elif project:
+            display = f"Google Cloud ({project})"
+        else:
+            display = "Google Cloud"
+        return True, display
+    except Exception:
+        pass
+
+    return False, None
+
+
+# ── Token Helpers ──────────────────────────────────────────────────
+
+
+def get_access_token() -> str:
+    """Get a Google Cloud access token (for googleapis.com endpoints).
+
+    Tries ADC with ``cloud-platform`` scope first, then falls back to
+    ``gcloud auth print-access-token``.
+
+    Raises:
+        RuntimeError: If both paths fail.
+    """
+    from google.auth import default
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
+    from google.agents.cli.scaffold.utils.command import run_gcloud_command
+
+    try:
+        credentials, _ = default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(GoogleAuthRequest())
+        if credentials.token:
+            return credentials.token
+    except Exception:
+        pass
+
+    try:
+        result = run_gcloud_command(
+            ["auth", "print-access-token"],
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except Exception as exc:
+        raise RuntimeError("Failed to get access token") from exc
+
+
+def get_id_token(audience: str) -> str:
+    """Get a Google Cloud ID token for the given audience.
+
+    Tries the IAM ``generateIdToken`` API first (works with WIF, SA keys,
+    and ADC), then falls back to ``gcloud auth print-identity-token``
+    for local development with user credentials.
+
+    Raises:
+        subprocess.CalledProcessError: If both paths fail.
+    """
+    import requests
+    from google.auth import default
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+
+    from google.agents.cli.scaffold.utils.command import run_gcloud_command
+
+    try:
+        credentials, _ = default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(GoogleAuthRequest())
+        sa_email = credentials.service_account_email
+        iam_response = requests.post(
+            f"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateIdToken",
+            headers={"Authorization": f"Bearer {credentials.token}"},
+            json={"audience": audience, "includeEmail": True},
+        )
+        iam_response.raise_for_status()
+        return iam_response.json()["token"]
+    except (AttributeError, requests.exceptions.HTTPError):
+        pass
+
+    # Fallback for local dev with gcloud auth login (no SA credentials).
+    # --audiences scopes the token to the target service, but user
+    # credentials don't support it — retry without if it fails.
+    try:
+        result = run_gcloud_command(
+            ["auth", "print-identity-token", f"--audiences={audience}"],
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        result = run_gcloud_command(
+            ["auth", "print-identity-token"],
+            capture_output=True,
+            check=True,
+        )
+    return result.stdout.strip()

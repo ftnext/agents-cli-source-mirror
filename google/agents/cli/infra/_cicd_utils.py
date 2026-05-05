@@ -1,0 +1,732 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Utilities for CI/CD setup and management."""
+
+import json
+import os
+import re
+import subprocess
+import time
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+import backoff
+import click
+from rich.prompt import IntPrompt, Prompt
+
+from google.agents.cli.scaffold.utils.command import get_gcloud_cmd
+
+
+def setup_git_provider(non_interactive: bool = False) -> str:
+    """Interactive selection of git provider."""
+    if non_interactive:
+        return "github"  # Default to GitHub in non-interactive mode
+
+    click.secho("\n> Git Provider Configuration", bold=True, fg="blue")
+    providers = [
+        ("github", "GitHub"),
+        # Add more providers here in the future
+        # ("gitlab", "GitLab (Coming soon)"),
+        # ("bitbucket", "Bitbucket (Coming soon)"),
+    ]
+
+    click.echo("Available Git providers:")
+    for i, (id, name) in enumerate(providers, 1):
+        if id == "github":
+            click.echo(f"{i}. {name}")
+        else:
+            click.secho(f"{i}. {name}", dim=True)
+
+    choice = IntPrompt.ask("Select your Git provider", default=1)
+
+    git_provider = providers[choice - 1][0]
+    if git_provider != "github":
+        click.secho("⚠️  Only GitHub is currently supported.", bold=True, fg="yellow")
+        raise ValueError("Unsupported git provider")
+
+    return git_provider
+
+
+def setup_repository_name(
+    default_prefix: str = "genai-app", non_interactive: bool = False
+) -> tuple[str, str]:
+    """Interactive setup of repository name and owner."""
+    if non_interactive:
+        timestamp = int(time.time())
+        # Return empty string instead of None to match return type
+        return f"{default_prefix}-{timestamp}", ""
+
+    click.secho("\n> Repository Configuration", bold=True, fg="blue")
+
+    # Get current GitHub username
+    result = run_command(["gh", "api", "user", "--jq", ".login"], capture_output=True)
+    github_username = result.stdout.strip()
+
+    # Get repository name
+    repo_name = Prompt.ask(
+        "Enter repository name", default=f"{default_prefix}-{int(time.time())}"
+    )
+
+    # Get repository owner (default to current user)
+    repo_owner = Prompt.ask(
+        "Enter repository owner (organization or username)", default=github_username
+    )
+
+    return repo_name, repo_owner
+
+
+def create_github_connection(
+    project_id: str, region: str, connection_name: str
+) -> tuple[str, str]:
+    """Create and verify GitHub connection using gcloud command.
+
+    Args:
+        project_id: GCP project ID
+        region: GCP region
+        connection_name: Name for the GitHub connection
+
+    Returns:
+        tuple[str, str]: The OAuth token secret ID and the app installation ID
+    """
+    click.echo("\n🔗 Creating GitHub connection...")
+
+    # First, ensure required APIs are enabled
+    require_apis_enabled(
+        project_id, ["cloudbuild.googleapis.com", "secretmanager.googleapis.com"]
+    )
+
+    def try_create_connection() -> subprocess.CompletedProcess[str]:
+        gcloud_cmd = get_gcloud_cmd()
+        cmd = [
+            gcloud_cmd,
+            "builds",
+            "connections",
+            "create",
+            "github",
+            connection_name,
+            f"--region={region}",
+            f"--project={project_id}",
+        ]
+
+        # Display the command being run
+        click.echo(f"\n🔄 Running command: {' '.join(cmd)}")
+
+        # Use Popen to get control over stdin
+        # On Windows, gcloud.cmd requires shell=True
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            shell=(os.name == "nt"),
+        )
+
+        # Send 'y' followed by enter key to handle both the API enablement prompt and any other prompts
+        stdout, stderr = process.communicate(input="y\n")
+
+        # Create a CompletedProcess-like object for compatibility
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=process.returncode, stdout=stdout, stderr=stderr
+        )
+
+    # Try initial connection creation
+    result = try_create_connection()
+
+    if result.returncode == 0:
+        click.echo("✅ GitHub connection created successfully")
+    else:
+        stderr = str(result.stderr)
+        click.echo(stderr)
+
+        if "ALREADY_EXISTS" in stderr:
+            click.echo("✅ Using existing GitHub connection")
+        else:
+            click.secho(
+                f"❌ Failed to create GitHub connection: {stderr}", bold=True, fg="red"
+            )
+            raise subprocess.CalledProcessError(
+                result.returncode, result.args, result.stdout, stderr
+            )
+
+    click.secho("\n⚠️ Important:", bold=True, fg="yellow")
+    click.echo(
+        "1. Please visit the URL below to authorize Cloud Build (if not already authorized)"
+    )
+    click.echo("2. After authorization, the setup will continue automatically")
+    click.echo("\nChecking connection status...")
+
+    # Poll for connection readiness
+    max_retries = 30  # 5 minutes total with 10s sleep
+    for attempt in range(max_retries):
+        try:
+            result = run_command(
+                [
+                    "gcloud",
+                    "builds",
+                    "connections",
+                    "describe",
+                    connection_name,
+                    f"--region={region}",
+                    f"--project={project_id}",
+                    "--format=json",
+                ],
+                capture_output=True,
+            )
+
+            status = json.loads(result.stdout).get("installationState", {}).get("stage")
+
+            if status == "COMPLETE":
+                click.echo("✅ GitHub connection is authorized and ready")
+
+                # Get the secret version and app installation ID
+                connection_data = json.loads(result.stdout)
+                github_config = connection_data.get("githubConfig", {})
+
+                oauth_token_secret_version = github_config.get(
+                    "authorizerCredential", {}
+                ).get("oauthTokenSecretVersion")
+                app_installation_id = github_config.get("appInstallationId")
+
+                if not oauth_token_secret_version or not app_installation_id:
+                    raise ValueError(
+                        "Could not find OAuth token secret version or app installation ID in connection details"
+                    )
+
+                # Extract just the secret ID from the full path
+                # Format: "projects/PROJECT_ID/secrets/SECRET_ID/versions/VERSION"
+                secret_id = oauth_token_secret_version.split("/secrets/")[1].split(
+                    "/versions/"
+                )[0]
+
+                click.echo(f"✅ Retrieved OAuth token secret ID: {secret_id}")
+                click.echo(f"✅ Retrieved app installation ID: {app_installation_id}")
+
+                return secret_id, app_installation_id
+            elif status == "PENDING_USER_OAUTH" or status == "PENDING_INSTALL_APP":
+                if attempt < max_retries - 1:  # Don't print waiting on last attempt
+                    click.echo("⏳ Waiting for authorization...")
+                    click.echo(
+                        f"Console: https://console.cloud.google.com/cloud-build/repositories?project={project_id}"
+                    )
+                    # Extract and print the action URI for user authentication
+                    try:
+                        action_uri = (
+                            json.loads(result.stdout)
+                            .get("installationState", {})
+                            .get("actionUri")
+                        )
+                        if action_uri:
+                            click.secho(
+                                "\n🔑 Authentication Required:", bold=True, fg="yellow"
+                            )
+                            click.echo(
+                                "Please visit this page to authenticate Cloud Build with GitHub:"
+                            )
+                            click.echo(f"\n{action_uri}\n")
+                            click.echo(
+                                "(Copy and paste the link into your browser if clicking doesn't work)"
+                            )
+                            click.echo(
+                                "After completing authentication, return here to continue the setup.\n"
+                            )
+                    except (json.JSONDecodeError, KeyError) as e:
+                        click.secho(
+                            f"⚠️ Could not extract authentication link: {e}", fg="yellow"
+                        )
+                    time.sleep(10)
+                continue
+            else:
+                raise Exception(f"Unexpected connection status: {status}")
+
+        except subprocess.CalledProcessError as e:
+            click.secho(f"❌ Failed to check connection status: {e}", bold=True, fg="red")
+            raise
+
+    raise TimeoutError("GitHub connection authorization timed out after 5 minutes")
+
+
+@dataclass
+class ProjectConfig:
+    staging_project_id: str
+    prod_project_id: str
+    cicd_project_id: str
+    agent: str
+    deployment_target: str
+    repository_name: str
+    repository_owner: str
+    region: str = "us-east1"
+    dev_project_id: str | None = None
+    project_name: str | None = None
+    create_repository: bool | None = None
+    host_connection_name: str | None = None
+    github_pat: str | None = None
+    github_app_installation_id: str | None = None
+    git_provider: str = "github"
+
+
+def print_cicd_summary(
+    config: ProjectConfig, github_username: str, repo_url: str, cloud_build_url: str
+) -> None:
+    """Print a summary of the CI/CD setup."""
+    click.secho("\n🎉 CI/CD Infrastructure Setup Complete!", bold=True, fg="green")
+    click.echo("====================================")
+    click.echo("\n📊 Resource Summary:")
+    click.echo(f"   • Development Project: {config.dev_project_id}")
+    click.echo(f"   • Staging Project: {config.staging_project_id}")
+    click.echo(f"   • Production Project: {config.prod_project_id}")
+    click.echo(f"   • CICD Project: {config.cicd_project_id}")
+    click.echo(f"   • Repository: {config.repository_name}")
+    click.echo(f"   • Region: {config.region}")
+
+    click.echo("\n🔗 Important Links:")
+    click.echo(f"   • GitHub Repository: {repo_url}")
+    click.echo(f"   • Cloud Build Console: {cloud_build_url}")
+
+    click.secho("\n📝 Next Steps:", bold=True, fg="blue")
+    click.echo("1. Push your code to the repository")
+    click.echo("2. Create and merge a pull request to trigger CI/CD pipelines")
+    click.echo("3. Monitor builds in the Cloud Build console")
+    click.echo(
+        "4. After successful staging deployment, approve production deployment in Cloud Build"
+    )
+    click.secho(
+        "\n🌟 Enjoy building your new Agent! Happy coding! 🚀", bold=True, fg="green"
+    )
+
+
+def require_apis_enabled(project_id: str, apis: list[str]) -> None:
+    """Check required APIs and fail if not enabled.
+
+    Args:
+        project_id: GCP project ID where APIs should be checked
+        apis: List of API service names to check
+    """
+    click.echo("\n🔍 Checking required APIs...")
+    missing_apis = []
+    for api in apis:
+        try:
+            # Check if API is enabled
+            result = run_command(
+                [
+                    "gcloud",
+                    "services",
+                    "list",
+                    f"--project={project_id}",
+                    f"--filter=config.name:{api}",
+                    "--format=json",
+                ],
+                capture_output=True,
+            )
+
+            services = json.loads(result.stdout)
+            if not services:  # API not enabled
+                missing_apis.append(api)
+            else:
+                click.echo(f"✅ {api} already enabled")
+        except subprocess.CalledProcessError as e:
+            click.secho(f"❌ Failed to check {api}: {e!s}", bold=True, fg="red")
+            raise
+
+    if missing_apis:
+        click.secho("\n❌ Missing required APIs:", bold=True, fg="red")
+        for api in missing_apis:
+            click.echo(f"  • {api}")
+        click.echo("\nPlease enable them by running:")
+        for api in missing_apis:
+            click.echo(f"  gcloud services enable {api} --project={project_id}")
+        raise click.ClickException("Required APIs are not enabled.")
+
+
+@backoff.on_exception(
+    backoff.expo,
+    subprocess.CalledProcessError,
+    max_tries=3,
+    max_time=60,
+    on_backoff=lambda details: click.echo(
+        f"⚠️ Command failed, retrying in {details['wait']:.1f}s (attempt {details['tries']})"
+    ),
+)
+def run_command(
+    cmd: list[str] | str,
+    check: bool = True,
+    cwd: Path | None = None,
+    capture_output: bool = False,
+    shell: bool = False,
+    input: str | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
+    """Run a command and display it to the user.
+
+    Automatically handles Windows compatibility for gcloud commands by:
+    - Resolving the full path to gcloud executable (via command.py)
+    - Using shell=True on Windows for .cmd files
+    """
+    # Handle gcloud commands for Windows compatibility
+    if isinstance(cmd, list) and len(cmd) > 0 and cmd[0] == "gcloud":
+        cmd = [get_gcloud_cmd(), *cmd[1:]]
+        # On Windows, gcloud.cmd requires shell=True
+        if os.name == "nt":
+            shell = True
+
+    # Format command for display
+    cmd_str = cmd if isinstance(cmd, str) else " ".join(cmd)
+    click.echo(f"\n🔄 Running command: {cmd_str}")
+    if cwd:
+        click.echo(f"📂 In directory: {cwd}")
+
+    # Prepare environment variables
+    env = None
+    if env_vars:
+        env = os.environ.copy()
+        env.update(env_vars)
+
+    # Run the command
+    result = subprocess.run(
+        cmd,
+        check=check,
+        cwd=cwd,
+        capture_output=capture_output,
+        text=True,
+        shell=shell,
+        input=input,
+        env=env,
+    )
+
+    # Display output if captured
+    if capture_output and result.stdout:
+        click.echo(f"📤 Output:\n{result.stdout.strip()}")
+    if capture_output and result.stderr:
+        click.echo(f"⚠️ Error output:\n{result.stderr}")
+
+    return result
+
+
+def is_github_authenticated() -> bool:
+    """Check if the user is authenticated with GitHub CLI.
+
+    Returns:
+        bool: True if authenticated, False otherwise
+    """
+    try:
+        # Try to get the current user, which will fail if not authenticated
+        result = run_command(["gh", "auth", "status"], check=False, capture_output=True)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def handle_github_authentication(interactive: bool = True) -> None:
+    """Handle GitHub CLI authentication.
+
+    Args:
+        interactive: When True, prompts interactively. When False, raises UsageError.
+    """
+    if not interactive:
+        raise click.UsageError(
+            "GitHub authentication required. Run with --interactive (-i) to authenticate "
+            "interactively, or set GITHUB_TOKEN env var."
+        )
+
+    click.secho("\n🔑 GitHub Authentication Required", bold=True, fg="yellow")
+    click.echo("You need to authenticate with GitHub CLI to continue.")
+    click.echo("Choose an authentication method:")
+    click.echo("1. Login with browser")
+    click.echo("2. Login with token")
+
+    choice = click.prompt(
+        "Select authentication method", type=click.Choice(["1", "2"]), default="1"
+    )
+
+    try:
+        if choice == "1":
+            # Browser-based authentication
+            run_command(["gh", "auth", "login", "--web"])
+        else:
+            # Token-based authentication
+            token = click.prompt(
+                "Enter your GitHub Personal Access Token", hide_input=True
+            )
+            # Use a subprocess with pipe to avoid showing the token in process list
+            process = subprocess.Popen(
+                ["gh", "auth", "login", "--with-token"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            stdout, stderr = process.communicate(input=token + "\n")
+
+            if process.returncode != 0:
+                click.secho(f"❌ Authentication failed: {stderr}", bold=True, fg="red")
+                raise subprocess.CalledProcessError(
+                    process.returncode, ["gh", "auth", "login"], stdout, stderr
+                )
+
+        click.secho("✅ Successfully authenticated with GitHub", fg="green")
+    except subprocess.CalledProcessError as e:
+        click.secho(f"❌ Authentication failed: {e}", bold=True, fg="red")
+        raise click.Abort() from e
+
+
+def create_github_repository(repository_owner: str, repository_name: str) -> None:
+    """Create GitHub repository if it doesn't exist.
+
+    Args:
+        repository_owner: Owner of the repository
+        repository_name: Name of the repository to create
+    """
+    try:
+        # Check if repo exists
+        result = run_command(
+            [
+                "gh",
+                "repo",
+                "view",
+                f"{repository_owner}/{repository_name}",
+                "--json",
+                "name",
+            ],
+            capture_output=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            # Repository doesn't exist, create it
+            click.echo(
+                f"\n📦 Creating GitHub repository: {repository_owner}/{repository_name}"
+            )
+            run_command(
+                [
+                    "gh",
+                    "repo",
+                    "create",
+                    f"{repository_owner}/{repository_name}",
+                    "--private",
+                    "--description",
+                    "Repository created with Agents CLI",
+                ]
+            )
+            click.echo("✅ GitHub repository created")
+        else:
+            click.echo("✅ Using existing GitHub repository")
+    except subprocess.CalledProcessError as e:
+        click.secho(f"❌ Failed to create/check repository: {e!s}", bold=True, fg="red")
+        raise
+
+
+class Environment(Enum):
+    DEV = "dev"
+    STAGING = "staging"
+    PROD = "prod"
+    CICD = "cicd"
+
+
+class E2EDeployment:
+    def __init__(self, config: ProjectConfig) -> None:
+        self.config = config
+        self.projects: dict[Environment, Path] = {}
+
+        # Generate project name if not provided
+        if not self.config.project_name:
+            # Create a meaningful default project name based on agent and deployment target
+            prefix = f"{self.config.agent}-{self.config.deployment_target}"
+            # Clean up prefix to be filesystem compatible
+            prefix = re.sub(r"[^a-zA-Z0-9-]", "-", prefix.lower())
+            timestamp = int(time.time())
+            self.config.project_name = f"{prefix}-{timestamp}"
+
+    def update_terraform_vars(self, project_dir: Path, is_dev: bool = False) -> None:
+        """Update terraform variables with project configuration"""
+        if is_dev:
+            # Single-project environment only needs one project ID
+            tf_vars_path = (
+                project_dir
+                / "deployment"
+                / "terraform"
+                / "single-project"
+                / "vars"
+                / "env.tfvars"
+            )
+
+            with open(tf_vars_path, encoding="utf-8") as f:
+                content = f.read()
+
+            # Replace project ID
+            content = re.sub(
+                r'project_id\s*=\s*"[^"]*"',
+                f'project_id = "{self.config.dev_project_id}"',
+                content,
+            )
+        else:
+            # Path to production needs staging, prod, and CICD project IDs
+            tf_vars_path = (
+                project_dir / "deployment" / "terraform" / "vars" / "env.tfvars"
+            )
+
+            with open(tf_vars_path, encoding="utf-8") as f:
+                content = f.read()
+
+            # Replace all project IDs
+            content = re.sub(
+                r'staging_project_id\s*=\s*"[^"]*"',
+                f'staging_project_id = "{self.config.staging_project_id}"',
+                content,
+            )
+            content = re.sub(
+                r'prod_project_id\s*=\s*"[^"]*"',
+                f'prod_project_id = "{self.config.prod_project_id}"',
+                content,
+            )
+            content = re.sub(
+                r'cicd_runner_project_id\s*=\s*"[^"]*"',
+                f'cicd_runner_project_id = "{self.config.cicd_project_id}"',
+                content,
+            )
+
+            # Add host connection and repository name
+            content = re.sub(
+                r'host_connection_name\s*=\s*"[^"]*"',
+                f'host_connection_name = "{self.config.host_connection_name}"',
+                content,
+            )
+            content = re.sub(
+                r'repository_name\s*=\s*"[^"]*"',
+                f'repository_name = "{self.config.repository_name}"',
+                content,
+            )
+
+        # Write updated content
+        with open(tf_vars_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    def setup_terraform_state(self, project_dir: Path, env: Environment) -> None:
+        """Setup terraform state configuration for dev or prod environment"""
+        # Determine terraform directories - we need both for full setup
+        tf_dirs = []
+        if env == Environment.DEV:
+            tf_dirs = [project_dir / "deployment" / "terraform" / "single-project"]
+        else:
+            # For prod/staging, set up both root and single-project terraform
+            tf_dirs = [
+                project_dir / "deployment" / "terraform",
+                project_dir / "deployment" / "terraform" / "single-project",
+            ]
+
+        bucket_name = f"{self.config.cicd_project_id}-terraform-state"
+
+        # Ensure bucket exists and is accessible
+        try:
+            result = run_command(
+                ["gcloud", "storage", "buckets", "describe", f"gs://{bucket_name}"],
+                check=False,
+                capture_output=True,
+            )
+
+            if result.returncode != 0:
+                click.echo(f"\n📦 Creating Terraform state bucket: {bucket_name}")
+                run_command(
+                    [
+                        "gcloud",
+                        "storage",
+                        "buckets",
+                        "create",
+                        f"gs://{bucket_name}",
+                        f"--project={self.config.cicd_project_id}",
+                        f"--location={self.config.region}",
+                    ]
+                )
+
+                run_command(
+                    [
+                        "gcloud",
+                        "storage",
+                        "buckets",
+                        "update",
+                        f"gs://{bucket_name}",
+                        "--versioning",
+                    ]
+                )
+        except subprocess.CalledProcessError as e:
+            click.echo(f"\n❌ Failed to setup state bucket: {e}")
+            raise
+
+        # Create backend.tf in each required directory
+        for tf_dir in tf_dirs:
+            # Use different state prefixes for single-project and prod/staging to keep states separate
+            is_single_project_dir = str(tf_dir).endswith("/single-project")
+            state_prefix = "single-project" if is_single_project_dir else "prod"
+
+            backend_file = tf_dir / "backend.tf"
+            with open(backend_file, "w", encoding="utf-8") as f:
+                f.write(f'''terraform {{
+  backend "gcs" {{
+    bucket = "{bucket_name}"
+    prefix = "{state_prefix}"
+  }}
+}}
+''')
+            click.echo(
+                f"\n✅ Terraform state configured in {tf_dir} to use bucket: {bucket_name} with prefix: {state_prefix}"
+            )
+
+    def setup_terraform(
+        self, project_dir: Path, env: Environment, local_state: bool = False
+    ) -> None:
+        """Initialize and apply Terraform for the given environment"""
+        click.echo(f"\n🏗️ Setting up Terraform for {env.value} environment")
+
+        # Setup state configuration for all required directories if using remote state
+        if not local_state:
+            self.setup_terraform_state(project_dir, env)
+
+        # Determine which directories to process and their corresponding var files
+        tf_configs = []
+        if env == Environment.DEV:
+            tf_configs = [
+                (
+                    project_dir / "deployment" / "terraform" / "single-project",
+                    "vars/env.tfvars",
+                )
+            ]
+        else:
+            # For prod/staging, we need both directories but with their own var files
+            tf_configs = [
+                (
+                    project_dir / "deployment" / "terraform",
+                    "vars/env.tfvars",
+                ),  # Prod vars
+                (
+                    project_dir / "deployment" / "terraform" / "single-project",
+                    "vars/env.tfvars",
+                ),  # Single-project vars
+            ]
+
+        # Initialize and apply Terraform for each directory
+        for tf_dir, var_file in tf_configs:
+            click.echo(f"\n🔧 Initializing Terraform in {tf_dir}...")
+            if local_state:
+                run_command(["terraform", "init", "-backend=false"], cwd=tf_dir)
+            else:
+                run_command(["terraform", "init"], cwd=tf_dir)
+
+            click.echo(f"\n🚀 Applying Terraform configuration in {tf_dir}...")
+            run_command(
+                ["terraform", "apply", f"-var-file={var_file}", "-auto-approve"],
+                cwd=tf_dir,
+            )

@@ -1,0 +1,4 @@
+[console_scripts]
+agents-cli=google.agents.cli.main:main
+google-agents-cli=google.agents.cli.main:main
+
