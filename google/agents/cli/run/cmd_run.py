@@ -173,7 +173,7 @@ def _build_remote_headers(
 @click.option(
     "--url",
     default=None,
-    help="URL of a remote agent to query.",
+    help="URL of a remote agent to query. If specified, no local server is started.",
 )
 @click.option(
     "--mode",
@@ -204,7 +204,7 @@ def _build_remote_headers(
 @click.option(
     "--session-id",
     default=None,
-    help="Resume an existing session/conversation context.",
+    help="Resume an existing session/conversation context. Requires --start-server for local sessions.",
 )
 @click.option(
     "--header",
@@ -212,6 +212,17 @@ def _build_remote_headers(
     "custom_headers",
     multiple=True,
     help="Custom HTTP header (format: 'Key: Value'). Repeatable. Overrides auto-detected auth.",
+)
+@click.option(
+    "--start-server",
+    "start_server",
+    is_flag=True,
+    default=False,
+    help=(
+        "Keep the local server running after execution. The server persists until "
+        "stopped with --stop-server, resulting in less overhead for subsequent "
+        "run requests. Sessions require this flag to persist state."
+    ),
 )
 @click.option(
     "--stop-server",
@@ -239,6 +250,7 @@ def cmd_run(
     files: tuple[str, ...],
     session_id: str | None,
     custom_headers: tuple[str, ...],
+    start_server: bool,
     verbose: bool,
 ):
     """Run the agent with a single prompt (non-interactive).
@@ -246,9 +258,12 @@ def cmd_run(
     MESSAGE is the prompt to send to the agent.
 
     \b
-    Run from your project directory to start a background
-    ``adk api_server`` and query it automatically. The server
-    is recycled after 30 min idle or with --stop-server.
+    Run from your project directory to query the agent locally. By default,
+    the local server is shut down after the command completes. Use
+    --start-server to keep the server running in the background, which
+    improves efficiency for multiple requests and is required for local
+    sessions. A running server persists until stopped with --stop-server.
+    After 30 minutes idle, any request will restart the server.
 
     \b
     Use --url to query a deployed agent instead. Requires
@@ -260,7 +275,7 @@ def cmd_run(
 
     \b
     Supports --file for multimodal input and --session-id for
-    conversation continuity.
+    conversation continuity. Local sessions require --start-server.
 
     \b
     Binary artifacts (images, audio, files) returned by the agent are
@@ -268,6 +283,13 @@ def cmd_run(
     listed in an 'Artifacts:' footer at the end of the response.
     File references returned by URI are not downloaded.
     """
+    if url and start_server:
+        click.secho(
+            "Warning: --start-server has no effect when using --url.",
+            fg="yellow",
+            err=True,
+        )
+
     target = _resolve_dispatch_target(
         url=url,
         mode=mode,
@@ -277,6 +299,7 @@ def cmd_run(
     if url:
         click.echo(f"Querying remote agent: {url} (mode: {target.mode})")
 
+    should_stop_server = not url and not start_server
     try:
         try:
             _dispatch_query(
@@ -305,9 +328,12 @@ def cmd_run(
         if not url:
             # If we got an error for the local server,
             # stop it so that a later retry will start a fresh one.
+            should_stop_server = True
+        raise
+    finally:
+        if should_stop_server:
             chdir_project_root()
             stop_server(Path.cwd())
-        raise
 
 
 def _is_agent_runtime_url(url: str) -> bool:

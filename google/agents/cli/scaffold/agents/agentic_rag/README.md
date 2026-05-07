@@ -6,12 +6,6 @@ The agent provides the infrastructure to create a Vertex AI Pipeline with your c
 
 ![search agent demo](https://storage.googleapis.com/github-repo/generative-ai/sample-apps/e2e-gen-ai-app-starter-pack/starter-pack-search-pattern.gif)
 
-## Architecture
-
-The agent implements the following architecture:
-
-![architecture diagram](https://storage.googleapis.com/github-repo/generative-ai/sample-apps/e2e-gen-ai-app-starter-pack/agentic_rag_agent_platform_search_architecture.png)
-
 ### Key Features
 
 - **Built on Agent Development Kit (ADK):** ADK is a flexible, modular framework for developing and deploying AI agents. It integrates with the Google ecosystem and Gemini models, supporting various LLMs and open-source AI tools, enabling both simple and complex agent architectures.

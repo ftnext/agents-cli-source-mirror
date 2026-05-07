@@ -152,6 +152,7 @@ def _start_server(
         "127.0.0.1",
         "--port",
         str(port),
+        "--reload_agents",
         ".",
     ]
 

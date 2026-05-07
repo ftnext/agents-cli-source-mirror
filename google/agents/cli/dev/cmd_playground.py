@@ -14,6 +14,8 @@
 
 """agents-cli playground command — start local agent playground."""
 
+import shlex
+
 import click
 from rich.console import Console
 from rich.panel import Panel
@@ -37,11 +39,7 @@ _console = Console()
     help="Enable / disable live reload when agent code changes.",
 )
 def cmd_playground(port, host, reload_agents):
-    """Start the local agent playground.
-
-    \b
-    Runs: uv run adk web . --host HOST --port PORT [--reload_agents]
-    """
+    """Start the local agent playground."""
     chdir_project_root()
     cfg = read_project_config()
     require_agent_directory(cfg)
@@ -50,19 +48,34 @@ def cmd_playground(port, host, reload_agents):
     # URL we print drops the user straight into their agent.
     browser_host = "localhost" if host == "0.0.0.0" else host
     url = f"http://{browser_host}:{port}/dev-ui/?app={cfg.agent_directory}"
-    _print_banner(url)
 
-    args = ["uv", "run", "adk", "web", ".", "--host", host, "--port", str(port)]
+    args = [
+        "uv",
+        "run",
+        "adk",
+        "web",
+        ".",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--allow_origins",
+        "*",
+    ]
     if reload_agents:
         args.append("--reload_agents")
-    run(args, check_err_msg="Failed to start playground")
+
+    _print_banner(url, args)
+    run(args, print_cmd=False, check_err_msg="Failed to start playground")
 
 
-def _print_banner(url: str) -> None:
+def _print_banner(url: str, cmd_args: list[str]) -> None:
     """Print a styled banner with a clickable URL pointing at the agent."""
+    cmd_str = shlex.join(cmd_args)
     body = (
         "[bold cyan]Starting your agent playground...[/]\n"
         "\n"
+        f"[bold]Running command:[/]       {cmd_str}\n"
         f"[bold]Will be available at:[/]  [green underline]{url}[/]"
     )
     _console.print(Panel(body, border_style="cyan"))

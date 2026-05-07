@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 
 import click
@@ -60,12 +61,14 @@ def cmd_info(as_json: bool) -> None:
     """Show project configuration, paths, and CLI version."""
     installed_skills = get_installed_skills()
     project_root = find_project_root()
+    os_info = platform.platform()
     if project_root is None:
         if as_json:
             emit(
                 {
                     "cli_version": __version__,
                     "cli_install_path": _CLI_INSTALL_PATH,
+                    "os_info": os_info,
                     "installed_skills": installed_skills,
                     "project": None,
                 }
@@ -73,6 +76,7 @@ def cmd_info(as_json: bool) -> None:
         else:
             click.echo(f"CLI version:        {__version__}")
             click.echo(f"CLI install path:   {_CLI_INSTALL_PATH}")
+            click.echo(f"OS info:            {os_info}")
             _print_installed_skills(installed_skills)
             click.echo()
             click.echo("No agent project found in the current directory or any parent.")
@@ -86,6 +90,7 @@ def cmd_info(as_json: bool) -> None:
     info = {
         "cli_version": __version__,
         "cli_install_path": _CLI_INSTALL_PATH,
+        "os_info": os_info,
         "installed_skills": installed_skills,
         "project_root": str(project_root),
         "project_name": cfg.project_name,
@@ -101,6 +106,7 @@ def cmd_info(as_json: bool) -> None:
 
     click.echo(f"CLI version:        {__version__}")
     click.echo(f"CLI install path:   {_CLI_INSTALL_PATH}")
+    click.echo(f"OS info:            {os_info}")
     _print_installed_skills(installed_skills)
     click.echo()
     click.echo(f"Project root:       {project_root}")

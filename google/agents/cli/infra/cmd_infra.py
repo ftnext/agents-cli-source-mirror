@@ -19,8 +19,8 @@ from pathlib import Path
 import click
 
 from google.agents.cli._project import chdir_project_root
-from google.agents.cli._runner import run
-from google.agents.cli._tools import require_tool
+from google.agents.cli._tools import get_terraform_path
+from google.agents.cli.infra._cicd_utils import run_terraform
 
 
 @click.group("infra")
@@ -38,7 +38,14 @@ def infra_group():
 
 @infra_group.command("single-project")
 @click.option("--project", default=None, help="GCP project ID.")
-def cmd_infra_single_project(project):
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    default=False,
+    help="Apply changes. Without this flag, only a plan is shown.",
+)
+def cmd_infra_single_project(project, apply_changes):
     """Provision single-project infrastructure (optional).
 
     Not required for basic deployments — `agents-cli deploy` works out of the
@@ -48,31 +55,27 @@ def cmd_infra_single_project(project):
     IAM bindings.
 
     \b
-    Runs: terraform init + terraform apply in deployment/terraform/single-project/
+    By default, runs terraform init + terraform plan to preview changes.
+    Use --apply to apply the changes.
     """
     chdir_project_root()
 
-    require_tool(
-        "terraform",
-        "Install Terraform: https://developer.hashicorp.com/terraform/install",
-    )
+    get_terraform_path()
 
-    tf_dir = "deployment/terraform/single-project"
+    tf_dir = Path("deployment/terraform/single-project")
 
-    if not Path(tf_dir).is_dir():
+    if not tf_dir.is_dir():
         raise click.ClickException(
             f"Terraform directory '{tf_dir}' not found.\n"
             "  Ensure your project was scaffolded with a deployment target that includes Terraform.\n"
             "  Run 'agents-cli scaffold enhance' to add deployment infrastructure."
         )
 
-    run(
-        ["terraform", f"-chdir={tf_dir}", "init"],
-        check_err_msg="Terraform init failed for single-project",
-    )
+    extra_vars = {"project_id": project} if project else None
+    run_terraform(tf_dir=tf_dir, apply=apply_changes, extra_vars=extra_vars)
 
-    apply_args = ["terraform", f"-chdir={tf_dir}", "apply", "-auto-approve"]
-    if project:
-        apply_args.extend(["-var", f"project_id={project}"])
-
-    run(apply_args, check_err_msg="Terraform apply failed for single-project")
+    if not apply_changes:
+        followup = "google-agents infra single-project --apply"
+        if project:
+            followup += f" --project {project}"
+        click.echo(f"\nTo apply these changes, run:\n  {followup}")

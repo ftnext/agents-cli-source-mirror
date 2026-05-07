@@ -1,8 +1,8 @@
 # ADK with Agent2Agent (A2A) Protocol: Minimal Agent Example
 
 <p align="center">
-  <img src="https://github.com/google/adk-docs/blob/main/docs/assets/adk-social-card.png?raw=true" width="200" alt="ADK Logo" style="margin-right: 40px; vertical-align: middle;">
-  <img src="https://github.com/a2aproject/A2A/blob/main/docs/assets/a2a-logo-white.svg?raw=true" width="200" alt="A2A Logo" style="vertical-align: middle;">
+  <img src="https://raw.githubusercontent.com/google/adk-docs/main/docs/assets/adk-social-card.png" width="200" alt="ADK Logo" style="margin-right: 40px; vertical-align: middle;">
+  <img src="https://raw.githubusercontent.com/a2aproject/A2A/main/docs/assets/a2a-logo-white.svg" width="200" alt="A2A Logo" style="vertical-align: middle;">
 </p>
 
 A basic agent built using the **[Google Agent Development Kit (ADK)](https://google.github.io/adk-docs/)** with **[Agent2Agent (A2A) Protocol](https://a2a-protocol.org/)** support. This example demonstrates core ADK concepts like agent creation and tool integration, while enabling distributed agent communication through the A2A protocol for interoperability with agents across different frameworks and languages.

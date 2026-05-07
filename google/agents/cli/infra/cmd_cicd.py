@@ -31,7 +31,6 @@ from google.agents.cli._tools import (
     get_gcloud_path,
     get_gh_path,
     get_git_path,
-    get_terraform_path,
 )
 from google.agents.cli.infra._cicd_utils import (
     ProjectConfig,
@@ -39,6 +38,7 @@ from google.agents.cli.infra._cicd_utils import (
     handle_github_authentication,
     is_github_authenticated,
     run_command,
+    run_terraform,
 )
 from google.agents.cli.scaffold.utils.logging import display_welcome_banner
 
@@ -524,6 +524,13 @@ def create_or_update_secret(secret_id: str, secret_value: str, project_id: str) 
     type=click.Choice(["google_cloud_build", "github_actions"]),
     help="CI/CD runner to use",
 )
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    default=False,
+    help="Apply changes. Without this flag, only a plan is shown.",
+)
 @backoff.on_exception(
     backoff.expo,
     (subprocess.CalledProcessError, click.ClickException),
@@ -546,6 +553,7 @@ def setup_cicd(
     debug: bool,
     interactive: bool,
     create_repository: bool,
+    apply_changes: bool,
     cicd_runner: str | None = None,
 ) -> None:
     """Set up CI/CD pipelines and Terraform infrastructure for your agent project.
@@ -553,6 +561,12 @@ def setup_cicd(
     Provisions GitHub Actions or Cloud Build pipelines with staging and production
     environments. Requires staging, prod, and CI/CD project IDs as flags.
     Pass --interactive to be guided through missing values interactively.
+
+    \b
+    By default, runs terraform plan to preview changes. Use --apply to apply.
+    Note: plan mode still writes local config files (env.tfvars, Terraform
+    templates) and verifies cloud prerequisites (GitHub auth, Cloud Build
+    connections) as these are required for an accurate plan.
     """
     display_welcome_banner(setup_cicd_mode=True, quiet=not interactive)
 
@@ -624,9 +638,18 @@ def setup_cicd(
 
     display_intro_message()
 
-    # Add the confirmation prompt (only in interactive mode)
+    # Confirm even in preview mode — prerequisites (GitHub connection,
+    # secrets, GCS backend) are created before terraform plan runs.
     if interactive:
-        if not click.confirm("\nDo you want to continue with the setup?", default=True):
+        if apply_changes:
+            confirm_msg = "\nDo you want to continue with the setup?"
+        else:
+            confirm_msg = (
+                "\nThis will configure prerequisites (GitHub connection, "
+                "secrets, Terraform backend) before running terraform plan.\n"
+                "Do you want to continue with the preview?"
+            )
+        if not click.confirm(confirm_msg, default=True):
             console.print("\n🛑 Setup cancelled by user", style="bold yellow")
             return
 
@@ -816,37 +839,27 @@ def setup_cicd(
                 f.write(f'project_id = "{dev_project}"\n')
             console.print("✅ Updated single-project env.tfvars")
 
-    # Apply single-project Terraform if dev project is provided
+    action_label = "Applying" if apply_changes else "Planning"
+
+    # Run single-project Terraform if dev project is provided
     if dev_project:
         sp_tf_dir = tf_dir.parent / "single-project"
         if sp_tf_dir.exists():
-            console.print("\n🏗️ Applying single-project Terraform configuration...")
-            terraform_path = get_terraform_path()
-            if local_state:
-                run_command([terraform_path, "init", "-backend=false"], cwd=sp_tf_dir)
-            else:
-                run_command([terraform_path, "init"], cwd=sp_tf_dir)
-            run_command(
-                [
-                    terraform_path,
-                    "apply",
-                    "-auto-approve",
-                    "--var-file",
-                    "vars/env.tfvars",
-                ],
-                cwd=sp_tf_dir,
+            console.print(f"\n🏗️ {action_label} single-project Terraform configuration...")
+            run_terraform(
+                tf_dir=sp_tf_dir,
+                apply=apply_changes,
+                local_state=local_state,
+                var_file="vars/env.tfvars",
             )
-            console.print("✅ Single-project environment deployed")
+
+            if apply_changes:
+                console.print("✅ Single-project environment deployed")
         else:
             console.print("ℹ️ No single-project Terraform directory found")
 
-    # Apply CI/CD Terraform
-    console.print("\n🚀 Applying CI/CD Terraform configuration...")
-    terraform_path = get_terraform_path()
-    if local_state:
-        run_command([terraform_path, "init", "-backend=false"], cwd=tf_dir)
-    else:
-        run_command([terraform_path, "init"], cwd=tf_dir)
+    # Run CI/CD Terraform
+    console.print(f"\n🚀 {action_label} CI/CD Terraform configuration...")
 
     # Prepare environment variables for Terraform
     terraform_env_vars = {}
@@ -855,11 +868,20 @@ def setup_cicd(
             github_pat  # For GitHub provider authentication
         )
 
-    run_command(
-        [terraform_path, "apply", "-auto-approve", "--var-file", "vars/env.tfvars"],
-        cwd=tf_dir,
-        env_vars=terraform_env_vars if terraform_env_vars else None,
+    run_terraform(
+        tf_dir=tf_dir,
+        apply=apply_changes,
+        local_state=local_state,
+        var_file="vars/env.tfvars",
+        env_vars=terraform_env_vars or None,
     )
+
+    if not apply_changes:
+        console.print(
+            "\nTo apply these changes, re-run the same command with [bold]--apply[/bold]."
+        )
+        return
+
     console.print("✅ Prod/Staging infrastructure deployed")
 
     config = ProjectConfig(

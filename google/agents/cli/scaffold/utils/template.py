@@ -441,7 +441,25 @@ def get_overwrite_folders(agent_directory: str) -> list[str]:
 
 
 TEMPLATE_CONFIG_FILE = "templateconfig.yaml"
-DEPLOYMENT_TARGETS = ["cloud_run", "gke", "agent_runtime", "none"]
+
+DEPLOYMENT_TARGETS = {
+    "agent_runtime": {
+        "display_name": "agent_runtime",
+        "description": "Vertex AI managed platform",
+    },
+    "cloud_run": {
+        "display_name": "cloud_run",
+        "description": "Serverless container platform",
+    },
+    "gke": {
+        "display_name": "gke",
+        "description": "Managed Kubernetes (Autopilot)",
+    },
+    "none": {
+        "display_name": "none",
+        "description": "No Cloud deployment",
+    },
+}
 SUPPORTED_LANGUAGES = ["python", "go", "java", "typescript"]
 DEFAULT_FRONTEND = "None"
 
@@ -642,26 +660,6 @@ def prompt_deployment_target(
     """Ask user to select a deployment target for the agent."""
     targets = get_deployment_targets(agent_name, remote_config=remote_config)
 
-    # Define deployment target friendly names and descriptions
-    TARGET_INFO = {
-        "agent_platform_sessions": {
-            "display_name": "agent_platform_sessions",
-            "description": "Vertex AI managed platform",
-        },
-        "cloud_run": {
-            "display_name": "cloud_run",
-            "description": "Serverless container platform",
-        },
-        "gke": {
-            "display_name": "gke",
-            "description": "Managed Kubernetes (Autopilot)",
-        },
-        "none": {
-            "display_name": "none",
-            "description": "No Cloud deployment",
-        },
-    }
-
     if not targets:
         return ""
 
@@ -673,7 +671,7 @@ def prompt_deployment_target(
     console.print("\n> Please select a deployment target:")
     console.print("\n  [bold cyan]☁️  Deployment Targets[/]")
     for idx, target in enumerate(targets, 1):
-        info = TARGET_INFO.get(target, {})
+        info = DEPLOYMENT_TARGETS.get(target, {})
         display_name = info.get("display_name", target)
         description = info.get("description", "")
         if target == default_value:

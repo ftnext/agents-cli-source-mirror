@@ -1,6 +1,6 @@
 # ADK: Minimal Agent Example
 
-<img src="https://github.com/google/adk-docs/blob/main/docs/assets/adk-social-card.png?raw=true" width="400">
+<img src="https://raw.githubusercontent.com/google/adk-docs/main/docs/assets/adk-social-card.png" width="400">
 
 A basic agent built using the **[Google Agent Development Kit (ADK)](https://google.github.io/adk-docs/)**. This example demonstrates core ADK concepts like agent creation and tool integration in a minimal setup.
 

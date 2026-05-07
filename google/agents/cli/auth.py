@@ -366,17 +366,10 @@ def is_authenticated():
     if not _check_valid_adc():
         return False, None
 
-    # Get project and account, to display
+    # Get project and account for display
     project = _get_adc_project()
     account = _get_gcloud_account()
-    if account:
-        display = account
-        if project:
-            display += f" ({project})"
-    elif project:
-        display = f"Google Cloud ({project})"
-    else:
-        display = "Google Cloud"
+    display = f"{account or 'Google Cloud'}{f' for project {project}' if project else ''} (Application Default Credentials)"
     return True, display
 
 

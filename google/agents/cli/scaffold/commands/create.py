@@ -27,32 +27,11 @@ from click.core import ParameterSource
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
 
+from ..utils import remote_template, template
 from ..utils.command import run_gcloud_command
 from ..utils.datastores import DATASTORE_TYPES, DATASTORES
 from ..utils.gcp import verify_credentials_and_vertex
 from ..utils.logging import display_welcome_banner
-from ..utils.remote_template import (
-    fetch_remote_template,
-    get_base_template_name,
-    load_remote_template_config,
-    merge_template_configs,
-    parse_agent_spec,
-)
-from ..utils.template import (
-    add_base_template_dependencies,
-    add_bq_analytics_dependencies,
-    get_agent_language,
-    get_available_agents,
-    get_deployment_targets,
-    get_template_path,
-    load_template_config,
-    process_template,
-    prompt_cicd_runner_selection,
-    prompt_datastore_selection,
-    prompt_deployment_target,
-    prompt_session_type_selection,
-    resolve_agent_alias,
-)
 
 console = Console()
 
@@ -149,7 +128,7 @@ def shared_template_options(f: Callable) -> Callable:
     f = click.option(
         "--deployment-target",
         "-d",
-        type=click.Choice(["agent_runtime", "cloud_run", "gke", "none"]),
+        type=click.Choice(list(template.DEPLOYMENT_TARGETS.keys())),
         help="Deployment target name",
     )(f)
     f = click.option(
@@ -182,7 +161,7 @@ def get_available_base_templates() -> list[str]:
     Returns:
         List of base template names.
     """
-    agents = get_available_agents()
+    agents = template.get_available_agents()
     return sorted([agent_info["name"] for agent_info in agents.values()])
 
 
@@ -460,14 +439,14 @@ def create(
             return
 
     # Resolve agent name aliases (backwards compatibility)
-    agent = resolve_agent_alias(agent)
+    agent = template.resolve_agent_alias(agent)
 
     # Agent selection - handle remote templates
     selected_agent = None
     template_source_path = None
     temp_dir_to_clean = None
     remote_spec = None
-    agents = get_available_agents(deployment_target=deployment_target)
+    agents = template.get_available_agents(deployment_target=deployment_target)
 
     if agent:
         if agent.startswith("local@"):
@@ -489,9 +468,7 @@ def create(
             )
 
             # Check for version lock and execute nested command if found
-            from ..utils.remote_template import check_and_execute_with_version_lock
-
-            if check_and_execute_with_version_lock(
+            if remote_template.check_and_execute_with_version_lock(
                 template_source_path, agent, locked, project_name
             ):
                 # If we executed with locked version, cleanup and exit
@@ -509,7 +486,7 @@ def create(
             )
         else:
             # Check if it's a remote template specification
-            remote_spec = parse_agent_spec(agent)
+            remote_spec = remote_template.parse_agent_spec(agent)
             if remote_spec:
                 if remote_spec.is_adk_samples:
                     console.print(
@@ -518,8 +495,10 @@ def create(
                     )
                 else:
                     console.print(f"Fetching remote template: {agent}")
-                template_source_path, temp_dir_path = fetch_remote_template(
-                    remote_spec, agent, locked, project_name
+                template_source_path, temp_dir_path = (
+                    remote_template.fetch_remote_template(
+                        remote_spec, agent, locked, project_name
+                    )
                 )
                 temp_dir_to_clean = str(temp_dir_path)
                 selected_agent = (
@@ -528,7 +507,7 @@ def create(
 
                 # Show informational message for ADK samples with smart defaults
                 if remote_spec.is_adk_samples:
-                    config = load_remote_template_config(
+                    config = remote_template.load_remote_template_config(
                         template_source_path, is_adk_sample=True
                     )
                     if not config.get("has_explicit_config", True):
@@ -541,7 +520,7 @@ def create(
                         )
             else:
                 # Handle local agent selection
-                agents = get_available_agents(include_hidden=True)
+                agents = template.get_available_agents(include_hidden=True)
                 # First check if it's a valid agent name
                 if any(p["name"] == agent for p in agents.values()):
                     selected_agent = agent
@@ -586,12 +565,12 @@ def create(
             )
 
         # If browse functionality returned a remote agent spec, process it like CLI input
-        if final_agent and parse_agent_spec(final_agent) is not None:
+        if final_agent and remote_template.parse_agent_spec(final_agent) is not None:
             # Set agent to the returned spec for remote processing
             agent = final_agent
 
             # Process the remote template spec just like CLI input
-            remote_spec = parse_agent_spec(agent)
+            remote_spec = remote_template.parse_agent_spec(agent)
             if remote_spec:
                 if remote_spec.is_adk_samples:
                     console.print(
@@ -600,8 +579,10 @@ def create(
                     )
                 else:
                     console.print(f"Fetching remote template: {agent}")
-                template_source_path, temp_dir_path = fetch_remote_template(
-                    remote_spec, agent, locked, project_name
+                template_source_path, temp_dir_path = (
+                    remote_template.fetch_remote_template(
+                        remote_spec, agent, locked, project_name
+                    )
                 )
                 temp_dir_to_clean = str(temp_dir_path)
                 final_agent = (
@@ -610,7 +591,7 @@ def create(
 
                 # Show informational message for ADK samples with smart defaults
                 if remote_spec.is_adk_samples:
-                    config = load_remote_template_config(
+                    config = remote_template.load_remote_template_config(
                         template_source_path, is_adk_sample=True
                     )
                     if not config.get("has_explicit_config", True):
@@ -636,12 +617,12 @@ def create(
 
         # First, get the original base template BEFORE applying cli_overrides
         # This allows us to detect if user is actually overriding vs selecting same
-        original_config = load_remote_template_config(
+        original_config = remote_template.load_remote_template_config(
             template_source_path,
             None,  # No CLI overrides to get original value
             is_adk_sample=remote_spec.is_adk_samples if remote_spec else False,
         )
-        original_base_template = get_base_template_name(original_config)
+        original_base_template = remote_template.get_base_template_name(original_config)
 
         if base_template:
             # Validate that the base template exists
@@ -659,7 +640,7 @@ def create(
             cli_overrides["base_template"] = base_template
 
         # Load remote template config with CLI overrides
-        source_config = load_remote_template_config(
+        source_config = remote_template.load_remote_template_config(
             template_source_path,
             cli_overrides,
             is_adk_sample=remote_spec.is_adk_samples if remote_spec else False,
@@ -670,7 +651,7 @@ def create(
             logging.debug(f"Final remote template config: {source_config}")
 
         # Load base template config for inheritance
-        base_template_name = get_base_template_name(source_config)
+        base_template_name = remote_template.get_base_template_name(source_config)
         if debug:
             logging.debug(f"Using base template: {base_template_name}")
 
@@ -680,21 +661,21 @@ def create(
             / base_template_name
             / ".template"
         )
-        base_config = load_template_config(base_template_path)
+        base_config = template.load_template_config(base_template_path)
 
         # Merge configs: remote inherits from and overrides base
-        config = merge_template_configs(base_config, source_config)
+        config = remote_template.merge_template_configs(base_config, source_config)
         # For remote templates, use the template/ subdirectory as the template source
         template_path = template_source_path / ".template"
     else:
         template_path = (
             pathlib.Path(__file__).parent.parent / "agents" / final_agent / ".template"
         )
-        config = load_template_config(template_path)
+        config = template.load_template_config(template_path)
 
         # Apply CLI overrides for local templates if provided (e.g., from enhance command)
         if cli_overrides:
-            config = merge_template_configs(config, cli_overrides)
+            config = remote_template.merge_template_configs(config, cli_overrides)
             if debug:
                 logging.debug(
                     f"Applied CLI overrides to local template config: {cli_overrides}"
@@ -709,7 +690,7 @@ def create(
 
     # Data ingestion and datastore selection
     # Check language early for data ingestion validation
-    early_agent_language = get_agent_language(final_agent)
+    early_agent_language = template.get_agent_language(final_agent)
 
     # Non-Python agents don't support data ingestion
     if early_agent_language != "python":
@@ -737,7 +718,7 @@ def create(
 
     if include_data_ingestion and not datastore and early_agent_language == "python":
         if interactive:
-            datastore = prompt_datastore_selection(final_agent)
+            datastore = template.prompt_datastore_selection(final_agent)
         elif auto_approve:
             datastore = next(iter(DATASTORES.keys()))
             console.print(
@@ -759,7 +740,7 @@ def create(
     remote_config = None
     if template_source_path:
         # Use the base template name from remote config for deployment target selection
-        deployment_agent_name = get_base_template_name(config)
+        deployment_agent_name = remote_template.get_base_template_name(config)
         remote_config = config
 
     final_deployment = deployment_target
@@ -771,7 +752,7 @@ def create(
                 style="yellow",
             )
         else:
-            available_targets = get_deployment_targets(
+            available_targets = template.get_deployment_targets(
                 deployment_agent_name, remote_config=remote_config
             )
             if not available_targets:
@@ -786,7 +767,7 @@ def create(
                     style="yellow",
                 )
             elif interactive:
-                final_deployment = prompt_deployment_target(
+                final_deployment = template.prompt_deployment_target(
                     deployment_agent_name, remote_config=remote_config
                 )
             elif auto_approve:
@@ -807,7 +788,7 @@ def create(
     final_session_type = session_type
 
     # Get agent language for language-specific validation
-    agent_language = get_agent_language(deployment_agent_name, remote_config)
+    agent_language = template.get_agent_language(deployment_agent_name, remote_config)
 
     # Non-Python agents only support in-memory sessions
     if agent_language != "python":
@@ -841,7 +822,7 @@ def create(
                     # Allow session type selection for supported agents
                     if not session_type:
                         if interactive:
-                            final_session_type = prompt_session_type_selection()
+                            final_session_type = template.prompt_session_type_selection()
                         else:
                             final_session_type = "in_memory"
                             if not auto_approve:
@@ -896,7 +877,7 @@ def create(
     elif cicd_runner:
         final_cicd_runner = cicd_runner
     elif interactive:
-        final_cicd_runner = prompt_cicd_runner_selection()
+        final_cicd_runner = template.prompt_cicd_runner_selection()
     else:
         final_cicd_runner = "skip"
         if auto_approve:
@@ -926,7 +907,7 @@ def create(
     if not skip_checks and not google_api_key:
         # Set up GCP environment
         try:
-            creds_info = setup_gcp_environment(
+            creds_info = _setup_gcp_environment(
                 auto_approve=auto_approve,
                 interactive=interactive,
                 skip_checks=skip_checks,
@@ -966,7 +947,7 @@ def create(
 
     # Process template
     if not template_source_path:
-        template_path = get_template_path(final_agent, debug=debug)
+        template_path = template.get_template_path(final_agent, debug=debug)
     # template_path is already set above for remote templates
 
     if debug:
@@ -989,7 +970,7 @@ def create(
 
     try:
         # Process template (handles both local and remote templates)
-        process_template(
+        template.process_template(
             agent_name=final_agent,
             template_dir=template_path,
             project_name=project_name,
@@ -1032,13 +1013,13 @@ def create(
             and not skip_deps
         ):
             # Load base template config to get extra_dependencies
-            base_template_path = get_template_path(base_template, debug=debug)
-            base_config = load_template_config(base_template_path)
+            base_template_path = template.get_template_path(base_template, debug=debug)
+            base_config = template.load_template_config(base_template_path)
             base_deps = base_config.get("settings", {}).get("extra_dependencies", [])
 
             if base_deps:
                 # Call interactive dependency addition
-                add_base_template_dependencies(
+                template.add_base_template_dependencies(
                     project_path,
                     base_deps,
                     base_template,
@@ -1052,7 +1033,7 @@ def create(
                 "\n[bold blue]Adding BigQuery Agent Analytics Plugin dependencies...[/]"
             )
             try:
-                add_bq_analytics_dependencies(
+                template.add_bq_analytics_dependencies(
                     project_path=project_path,  # Path to the newly created agent project
                     auto_approve=auto_approve,
                     interactive=interactive,
@@ -1147,7 +1128,7 @@ def display_agent_selection(
     language: str | None = None,
 ) -> AgentSelectionResult:
     """Display available agents grouped by language/framework and prompt for selection."""
-    agents = get_available_agents(deployment_target=deployment_target)
+    agents = template.get_available_agents(deployment_target=deployment_target)
 
     # Filter by language if specified
     if language:
@@ -1250,7 +1231,7 @@ def display_more_options_submenu(
         return display_adk_samples_selection()
     elif choice == 3:
         url = Prompt.ask("\nEnter the remote template URL")
-        spec = parse_agent_spec(url)
+        spec = remote_template.parse_agent_spec(url)
         if spec:
             return AgentSelectionResult(agent=url)
         else:
@@ -1265,23 +1246,19 @@ def display_more_options_submenu(
 def display_adk_samples_selection() -> AgentSelectionResult:
     """Display adk-samples agents and prompt for selection."""
 
-    from ..utils.remote_template import fetch_remote_template, parse_agent_spec
-
     console.print("\n> Fetching agents from [bold blue]google/adk-samples[/]...")
 
     try:
         # Parse the adk-samples repository
-        spec = parse_agent_spec("https://github.com/google/adk-samples")
+        spec = remote_template.parse_agent_spec("https://github.com/google/adk-samples")
         if not spec:
             raise RuntimeError("Failed to parse adk-samples repository")
 
         # Fetch the repository
-        repo_path, _ = fetch_remote_template(spec)
+        repo_path, _ = remote_template.fetch_remote_template(spec)
 
         # Use shared ADK discovery function
-        from ..utils.remote_template import discover_adk_agents
-
-        adk_agents = discover_adk_agents(repo_path)
+        adk_agents = remote_template.discover_adk_agents(repo_path)
 
         if not adk_agents:
             console.print("No agents found in adk-samples repository", style="yellow")
@@ -1291,9 +1268,7 @@ def display_adk_samples_selection() -> AgentSelectionResult:
         console.print("\n> Available agents from [bold blue]google/adk-samples[/]:")
 
         # Show explanation for inferred agents at the top
-        from ..utils.remote_template import display_adk_caveat_if_needed
-
-        display_adk_caveat_if_needed(adk_agents)
+        remote_template.display_adk_caveat_if_needed(adk_agents)
 
         for num, agent in adk_agents.items():
             name_with_indicator = agent["name"]
@@ -1363,7 +1338,7 @@ def set_gcp_project(project_id: str, set_quota_project: bool = True) -> None:
     console.print(f"> Successfully configured project: {project_id}")
 
 
-def setup_gcp_environment(
+def _setup_gcp_environment(
     *,
     auto_approve: bool,
     skip_checks: bool,

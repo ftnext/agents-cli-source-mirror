@@ -408,6 +408,40 @@ def run_command(
     return result
 
 
+def run_terraform(
+    *,
+    tf_dir: Path | str,
+    apply: bool,
+    local_state: bool = False,
+    var_file: str | None = None,
+    extra_vars: dict[str, str] | None = None,
+    env_vars: dict[str, str] | None = None,
+) -> None:
+    """Run terraform init followed by plan or apply in a directory."""
+    tf_dir = Path(tf_dir)
+    terraform_path = get_terraform_path()
+
+    init_args: list[str] = [terraform_path, "init"]
+    if local_state:
+        init_args.append("-backend=false")
+    run_command(init_args, cwd=tf_dir)
+
+    if apply:
+        # -auto-approve is safe here: the user already reviewed changes via
+        # the default plan step before explicitly opting in with --apply.
+        action_args: list[str] = [terraform_path, "apply", "-auto-approve"]
+    else:
+        action_args = [terraform_path, "plan"]
+
+    if var_file:
+        action_args.extend(["--var-file", var_file])
+    if extra_vars:
+        for key, value in extra_vars.items():
+            action_args.extend(["-var", f"{key}={value}"])
+
+    run_command(action_args, cwd=tf_dir, env_vars=env_vars)
+
+
 def is_github_authenticated() -> bool:
     """Check if the user is authenticated with GitHub CLI.
 
@@ -719,15 +753,10 @@ class E2EDeployment:
 
         # Initialize and apply Terraform for each directory
         for tf_dir, var_file in tf_configs:
-            click.echo(f"\n🔧 Initializing Terraform in {tf_dir}...")
-            terraform_path = get_terraform_path()
-            if local_state:
-                run_command([terraform_path, "init", "-backend=false"], cwd=tf_dir)
-            else:
-                run_command([terraform_path, "init"], cwd=tf_dir)
-
-            click.echo(f"\n🚀 Applying Terraform configuration in {tf_dir}...")
-            run_command(
-                [terraform_path, "apply", f"-var-file={var_file}", "-auto-approve"],
-                cwd=tf_dir,
+            click.echo(f"\n🔧 Running Terraform in {tf_dir}...")
+            run_terraform(
+                tf_dir=tf_dir,
+                apply=True,
+                local_state=local_state,
+                var_file=var_file,
             )
