@@ -1,0 +1,350 @@
+name: Import google-agents-cli wheel
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'google-agents-cli version to import (e.g. 0.1.4)'
+        required: true
+        type: string
+
+# Serialize per-version: a second invocation for the same version waits
+# for the first to finish rather than running concurrently. Different
+# versions can still run in parallel.
+concurrency:
+  group: import-wheel-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # prepare: read-only job that runs the LLM-driven import.
+  # Has NO write credentials. Even if the LLM step (or its dependencies) is
+  # compromised, it cannot push to origin. The output is a git bundle handed
+  # off via artifact to the `publish` job.
+  # ---------------------------------------------------------------------------
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must match X.Y.Z (got: $VERSION)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fail if tag already exists
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null \
+             || git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag v${VERSION} already exists"
+            exit 1
+          fi
+
+      - name: Run import via Claude Code
+        uses: anthropics/claude-code-action@476e359e6203e73dad705c8b322e333fabbd7416  # v1.0.119
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are running inside a GitHub Actions runner. The working directory
+            is the checked-out repository for the unofficial google-agents-cli
+            source mirror.
+
+            Task: import google-agents-cli version ${{ inputs.version }} from
+            PyPI, commit the result, and create a tag. DO NOT push — a separate
+            workflow job will push afterwards.
+
+            Steps:
+              1. Run: ./scripts/import-wheel.sh ${{ inputs.version }}
+                 The script prints a Source URL and SHA256 at the end.
+                 Capture both verbatim from the script's stdout.
+              2. Run: git status --porcelain
+                 If the output is empty, fail with a clear message.
+                 If any path appears in this output that is OUTSIDE this
+                 allowlist, fail immediately with a clear message and DO NOT
+                 commit:
+                   - google/ (and anything under it)
+                   - METADATA
+                   - RECORD
+                   - WHEEL
+                   - entry_points.txt
+                   - LICENSE
+                   - NOTICE
+                 The import script must only touch these paths; anything else
+                 indicates tampering or a script bug.
+              3. Stage ONLY the allowlisted paths explicitly (do NOT use
+                 `git add -A` or `git add .`). Run:
+
+                   git add google METADATA RECORD WHEEL entry_points.txt LICENSE NOTICE 2>/dev/null || true
+
+                 (the `|| true` swallows "pathspec did not match" for
+                 NOTICE, which is optional in the wheel.)
+                 Then run `git status --porcelain` again — if any line
+                 starts with `??` (untracked) or ` M` / ` D` (unstaged
+                 modification), it means a file outside the allowlist was
+                 touched. In that case fail without committing.
+              4. Commit using two -m flags so the body is separated from the
+                 subject by a blank line. Run exactly:
+
+                   git commit \
+                     -m "Import google-agents-cli ${{ inputs.version }} wheel contents" \
+                     -m "Source: <URL>"$'\n'"SHA256: <SHA256>"
+
+                 Replace <URL> and <SHA256> with the values captured in step 1.
+                 The resulting commit message will be:
+
+                   Import google-agents-cli ${{ inputs.version }} wheel contents
+
+                   Source: <URL>
+                   SHA256: <SHA256>
+              5. Create the tag: git tag v${{ inputs.version }}
+              6. Verify: git log -1 --stat && git tag -l "v${{ inputs.version }}"
+
+            Constraints:
+              - Do not push, do not amend, do not modify files outside what
+                the import script changes.
+              - Do not invent Source/SHA256 — they must come from script output.
+          claude_args: "--allowedTools 'Bash(./scripts/import-wheel.sh:*),Bash(git:*)' --disallowedTools 'Bash(git push:*)' --max-turns 20"
+
+      - name: Verify commit + tag + diff allowlist
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          git log -1 --pretty=%s | grep -qF "Import google-agents-cli ${VERSION} wheel contents" \
+            || { echo "::error::HEAD subject mismatch"; git log -1; exit 1; }
+          git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null \
+            || { echo "::error::tag v${VERSION} not created"; exit 1; }
+
+          ALLOWED='^(google/.*|METADATA|RECORD|WHEEL|entry_points\.txt|LICENSE|NOTICE)$'
+          UNEXPECTED="$(git diff --name-only HEAD~1..HEAD | grep -vE "${ALLOWED}" || true)"
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::Commit touches paths outside the import allowlist:"
+            echo "${UNEXPECTED}"
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Working tree is not clean after commit:"
+            git status --porcelain
+            exit 1
+          fi
+
+      - name: Bundle commit + tag for handoff
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          # Bundle includes the new commit (HEAD) and the tag.
+          # Range origin/main..HEAD gives just the new commit; the tag points
+          # at HEAD so it's also captured.
+          git bundle create import.bundle "origin/main..HEAD" "refs/tags/v${VERSION}"
+          git bundle verify import.bundle
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: import-bundle-${{ inputs.version }}
+          path: import.bundle
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # publish: deterministic, minimal job that takes the bundle from `prepare`
+  # and pushes it. This is the ONLY place that holds write credentials.
+  # No LLM code runs here; only fetch-from-bundle + push.
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Re-validate input independently in this trust boundary. Even though
+      # `prepare` already validated, this job must not depend on prepare's
+      # checks: any future change to prepare must not be able to weaken the
+      # invariants that govern the write-credentialed publication.
+      - name: Re-validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must match X.Y.Z (got: $VERSION)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Re-check tag absence in this trust boundary. The same check runs in
+      # prepare, but publish must independently verify (race protection plus
+      # defense against any future loosening of prepare).
+      - name: Re-check tag does not exist on origin
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag v${VERSION} already exists on origin"
+            exit 1
+          fi
+
+      - name: Download bundle artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: import-bundle-${{ inputs.version }}
+
+      - name: Fetch from bundle
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          git bundle verify import.bundle
+          git fetch import.bundle "refs/tags/v${VERSION}:refs/tags/v${VERSION}"
+          git fetch import.bundle "HEAD:refs/import/incoming"
+
+      # Independent validation in this trusted, write-credentialed job.
+      # `prepare` runs the LLM and may be tampered with; its checks are
+      # advisory only. The boundary that protects `main` is THIS step:
+      # nothing reaches push unless every assertion below holds.
+      #
+      # Critical: validation must run against the CURRENT remote `main`,
+      # not the local `origin/main` that was fetched at checkout time.
+      # We refresh first, then capture the remote SHA as a lease that
+      # the push step uses to verify atomically that `main` has not moved.
+      - name: Validate bundle (security boundary)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+
+          # 0. Refresh remote tracking so all checks below are computed
+          #    against the current remote `main`, not the stale checkout
+          #    snapshot. The lease SHA captured here is what the push
+          #    step requires to still be the remote tip at push time.
+          git fetch origin main
+          LEASE_SHA="$(git rev-parse origin/main)"
+          echo "LEASE_SHA=${LEASE_SHA}" >> "$GITHUB_ENV"
+
+          # 1. Tag must be a lightweight tag (a direct ref to a commit), not
+          #    an annotated tag object. Annotated tags carry attacker-
+          #    controllable metadata (tagger / message) that bypasses the
+          #    diff allowlist; reject them outright.
+          TAG_TYPE="$(git cat-file -t "refs/tags/v${VERSION}")"
+          if [ "${TAG_TYPE}" != "commit" ]; then
+            echo "::error::tag v${VERSION} is a ${TAG_TYPE} object; only lightweight tags are allowed"
+            exit 1
+          fi
+
+          # 2. Tag points at the incoming commit.
+          if [ "$(git rev-parse refs/import/incoming)" != "$(git rev-parse "refs/tags/v${VERSION}^{commit}")" ]; then
+            echo "::error::tag v${VERSION} does not point at the incoming commit"
+            exit 1
+          fi
+
+          # 3. Exactly one commit ahead of origin/main (no smuggled history).
+          AHEAD="$(git rev-list --count origin/main..refs/import/incoming)"
+          if [ "${AHEAD}" != "1" ]; then
+            echo "::error::incoming has ${AHEAD} commits ahead of origin/main; expected exactly 1"
+            git log --oneline origin/main..refs/import/incoming
+            exit 1
+          fi
+
+          # 4. Commit subject matches the import format.
+          SUBJECT="$(git log -1 refs/import/incoming --pretty=%s)"
+          if ! echo "${SUBJECT}" | grep -qF "Import google-agents-cli ${VERSION} wheel contents"; then
+            echo "::error::incoming commit subject mismatch: ${SUBJECT}"
+            exit 1
+          fi
+
+          # 5. Diff stays strictly within the import allowlist.
+          # The import script (scripts/import-wheel.sh) only touches:
+          #   google/**, METADATA, RECORD, WHEEL, entry_points.txt, LICENSE, NOTICE
+          # Anything else means the prepare job (or its dependencies) was
+          # compromised; refuse to publish.
+          ALLOWED='^(google/.*|METADATA|RECORD|WHEEL|entry_points\.txt|LICENSE|NOTICE)$'
+          UNEXPECTED="$(git diff --name-only origin/main..refs/import/incoming | grep -vE "${ALLOWED}" || true)"
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::Bundle commit touches paths outside the import allowlist:"
+            echo "${UNEXPECTED}"
+            exit 1
+          fi
+
+          # 6. Author and committer identity must be exactly the bot identity
+          #    configured in `prepare`. A compromised prepare job could otherwise
+          #    forge "approved by <maintainer>" attribution that downstream
+          #    consumers (release tooling, audit logs) would trust.
+          EXPECTED_NAME='github-actions[bot]'
+          EXPECTED_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
+          IDENT="$(git show -s --format='%an%n%ae%n%cn%n%ce' refs/import/incoming)"
+          AN="$(echo "${IDENT}" | sed -n 1p)"
+          AE="$(echo "${IDENT}" | sed -n 2p)"
+          CN="$(echo "${IDENT}" | sed -n 3p)"
+          CE="$(echo "${IDENT}" | sed -n 4p)"
+          if [ "${AN}" != "${EXPECTED_NAME}" ] || [ "${AE}" != "${EXPECTED_EMAIL}" ] \
+             || [ "${CN}" != "${EXPECTED_NAME}" ] || [ "${CE}" != "${EXPECTED_EMAIL}" ]; then
+            echo "::error::commit identity mismatch:"
+            echo "  author:    ${AN} <${AE}>"
+            echo "  committer: ${CN} <${CE}>"
+            echo "  expected:  ${EXPECTED_NAME} <${EXPECTED_EMAIL}>"
+            exit 1
+          fi
+
+          # 7. Commit body must match exactly two lines:
+          #      Source: <URL>
+          #      SHA256: <64 hex digits>
+          #    No extra lines, no extra text. The prepare prompt produces
+          #    exactly this shape; anything else means the body was tampered
+          #    with to inject downstream-readable content.
+          BODY="$(git log -1 refs/import/incoming --pretty=%b)"
+          # Strip a trailing blank line that git can add to %b output.
+          BODY="$(printf '%s' "${BODY}" | sed -e :a -e '/^\s*$/{$d;N;ba' -e '}')"
+          BODY_LINE_COUNT="$(printf '%s\n' "${BODY}" | wc -l | tr -d ' ')"
+          if [ "${BODY_LINE_COUNT}" != "2" ]; then
+            echo "::error::commit body must be exactly 2 lines, got ${BODY_LINE_COUNT}:"
+            printf '%s\n' "${BODY}"
+            exit 1
+          fi
+          BODY_L1="$(printf '%s\n' "${BODY}" | sed -n 1p)"
+          BODY_L2="$(printf '%s\n' "${BODY}" | sed -n 2p)"
+          if ! echo "${BODY_L1}" | grep -qE '^Source: https://[^[:space:]]+$'; then
+            echo "::error::commit body line 1 does not match 'Source: https://...': ${BODY_L1}"
+            exit 1
+          fi
+          if ! echo "${BODY_L2}" | grep -qE '^SHA256: [0-9a-f]{64}$'; then
+            echo "::error::commit body line 2 does not match 'SHA256: <64 hex>': ${BODY_L2}"
+            exit 1
+          fi
+
+      # Atomic publication: branch and tag update in a single transaction.
+      #   --atomic            both refspec updates succeed or neither does;
+      #                       prevents an orphaned tag if the branch push fails
+      #   --force-with-lease  rejects the push if remote `main` has moved
+      #                       since validation, even atomically
+      # The tag is a new ref (no lease needed for it); the lease pins `main`.
+      - name: Push commit + tag (atomic)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -e
+          git push --atomic \
+                   --force-with-lease="refs/heads/main:${LEASE_SHA}" \
+                   origin \
+                   "refs/import/incoming:refs/heads/main" \
+                   "refs/tags/v${VERSION}"
