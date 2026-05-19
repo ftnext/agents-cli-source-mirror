@@ -114,7 +114,7 @@ jobs:
               - Do not push, do not amend, do not modify files outside what
                 the import script changes.
               - Do not invent Source/SHA256 — they must come from script output.
-          claude_args: "--allowedTools 'Bash(./scripts/import-wheel.sh:*),Bash(git:*)' --disallowedTools 'Bash(git push:*)' --max-turns 20"
+          claude_args: "--model claude-sonnet-4-6 --allowedTools 'Bash(./scripts/import-wheel.sh:*),Bash(git:*)' --disallowedTools 'Bash(git push:*)' --max-turns 20"
 
       - name: Verify commit + tag + diff allowlist
         env:
