@@ -17,15 +17,15 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # prepare: read-only job that runs the LLM-driven import.
-  # Has NO write credentials. Even if the LLM step (or its dependencies) is
-  # compromised, it cannot push to origin. The output is a git bundle handed
-  # off via artifact to the `publish` job.
+  # prepare runs the LLM-driven import without repository contents write access.
+  # `id-token: write` is only for Claude Code Action OIDC authentication; pushes
+  # are still impossible here because `contents` is read-only.
   # ---------------------------------------------------------------------------
   prepare:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Validate version input
         env:
