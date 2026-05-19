@@ -41,11 +41,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Configure git identity
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
       - name: Fail if tag already exists
         env:
           VERSION: ${{ inputs.version }}
@@ -287,11 +282,11 @@ jobs:
           fi
 
           # 6. Author and committer identity must be exactly the bot identity
-          #    configured in `prepare`. A compromised prepare job could otherwise
-          #    forge "approved by <maintainer>" attribution that downstream
-          #    consumers (release tooling, audit logs) would trust.
-          EXPECTED_NAME='github-actions[bot]'
-          EXPECTED_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
+          #    used by Claude Code Action. A compromised prepare job could
+          #    otherwise forge "approved by <maintainer>" attribution that
+          #    downstream consumers (release tooling, audit logs) would trust.
+          EXPECTED_NAME='claude[bot]'
+          EXPECTED_EMAIL='41898282+claude[bot]@users.noreply.github.com'
           IDENT="$(git show -s --format='%an%n%ae%n%cn%n%ce' refs/import/incoming)"
           AN="$(echo "${IDENT}" | sed -n 1p)"
           AE="$(echo "${IDENT}" | sed -n 2p)"
