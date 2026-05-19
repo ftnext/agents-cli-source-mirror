@@ -18,12 +18,12 @@ from pathlib import Path
 
 import click
 
+from google.agents.cli import _tools
 from google.agents.cli._project import (
     chdir_project_root,
     read_project_config,
 )
 from google.agents.cli._runner import run
-from google.agents.cli._tools import require_tool
 from google.agents.cli.data._helpers import (
     get_datastore_type,
     require_project_id,
@@ -72,13 +72,13 @@ def cmd_infra_datastore(project, region):
     if not datastore_type:
         raise click.ClickException(
             "No datastore type configured. "
-            "Set datastore under [tool.agents-cli.create_params] in pyproject.toml."
+            "Set datastore under create_params in agents-cli-manifest.yaml."
         )
 
     project_id = require_project_id(project)
     var_args = ["-var", f"project_id={project_id}"]
 
-    require_tool(
+    _tools.require_tool(
         "terraform",
         "Install Terraform: https://developer.hashicorp.com/terraform/install",
     )

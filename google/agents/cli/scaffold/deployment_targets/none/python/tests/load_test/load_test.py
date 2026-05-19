@@ -216,23 +216,17 @@ from a2a.types import (
     TextPart,
 )
 from locust import HttpUser, between, task
-{%- elif cookiecutter.is_adk %}
-import uuid
-
-from locust import HttpUser, between, task
 {%- else %}
+import uuid
 
 from locust import HttpUser, between, task
 {%- endif %}
 {%- if cookiecutter.is_a2a %}
 
 ENDPOINT = "/a2a/{{cookiecutter.agent_directory}}"
-{%- elif cookiecutter.is_adk %}
-
-ENDPOINT = "/run_sse"
 {%- else %}
 
-ENDPOINT = "/stream_messages"
+ENDPOINT = "/run_sse"
 {%- endif %}
 
 # Configure logging
@@ -281,7 +275,6 @@ class ChatStreamUser(HttpUser):
         headers = {"Content-Type": "application/json"}
         if os.environ.get("_ID_TOKEN"):
             headers["Authorization"] = f"Bearer {os.environ['_ID_TOKEN']}"
-{%- if cookiecutter.is_adk %}
         # Create session first
         user_id = f"user_{uuid.uuid4()}"
         session_data = {"state": {"preferred_language": "English", "visit_count": 1}}
@@ -306,20 +299,6 @@ class ChatStreamUser(HttpUser):
             },
             "streaming": True,
         }
-{%- else %}
-        data = {
-            "input": {
-                "messages": [
-                    {"type": "human", "content": "Hello, AI!"},
-                    {"type": "ai", "content": "Hello!"},
-                    {"type": "human", "content": "Who are you?"},
-                ]
-            },
-            "config": {
-                "metadata": {"user_id": "test-user", "session_id": "test-session"}
-            },
-        }
-{%- endif %}
         start_time = time.time()
 
         with self.client.post(

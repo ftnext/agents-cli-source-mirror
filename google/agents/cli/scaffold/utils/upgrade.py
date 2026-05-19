@@ -19,10 +19,11 @@ import hashlib
 import logging
 import pathlib
 import re
-import subprocess
 import tomllib
 from dataclasses import dataclass, field
 from typing import Literal
+
+import yaml
 
 # Patterns use {agent_directory} placeholder replaced at runtime
 FILE_CATEGORIES = {
@@ -46,13 +47,13 @@ FILE_CATEGORIES = {
         "*.env",
     ],
     "dependencies": [  # Special merge handling
+        # ACLI config
+        "agents-cli-manifest.yaml",
         # Python dependencies
         "pyproject.toml",
         # Go dependencies
         "go.mod",
         "go.sum",
-        # Go / TypeScript ACLI config
-        ".acli.toml",
         # Java dependencies (ACLI config is in pom.xml properties)
         "pom.xml",
         # TypeScript dependencies
@@ -484,6 +485,9 @@ def write_merged_dependencies(
     project_dir = pyproject_path.parent
 
     try:
+        from google.agents.cli._runner import run_resolved
+        from google.agents.cli._tools import ToolNotFoundError
+
         # Determine which deps to remove (in current but not in merged)
         current_deps = _load_dependencies_from_pyproject(pyproject_path)
         merged_names: set[str] = set()
@@ -494,7 +498,7 @@ def write_merged_dependencies(
         to_remove = [n for n in current_deps if n not in merged_names]
 
         if to_remove:
-            result = subprocess.run(
+            result = run_resolved(
                 ["uv", "remove", "--frozen", *to_remove],
                 cwd=project_dir,
                 capture_output=True,
@@ -505,7 +509,7 @@ def write_merged_dependencies(
 
         # Add / update all merged deps
         if merged_deps:
-            result = subprocess.run(
+            result = run_resolved(
                 ["uv", "add", "--frozen", *merged_deps],
                 cwd=project_dir,
                 capture_output=True,
@@ -516,7 +520,8 @@ def write_merged_dependencies(
                 return False
 
         return True
-    except FileNotFoundError:
+    # run_resolved raises ToolNotFoundError if the executable is not found
+    except ToolNotFoundError:
         logging.warning("uv not found — cannot write merged dependencies")
         return False
     except Exception as e:
@@ -531,105 +536,131 @@ def update_acli_metadata(
     language: str = "python",
     remove_keys: list[str] | None = None,
 ) -> bool:
-    """Update specific keys in ACLI metadata for any supported language.
-
-    Handles all config formats:
-    - Python: ``pyproject.toml`` under ``[tool.agents-cli]``
-    - Go / TypeScript: ``.acli.toml`` under ``[project]``
-    - Java: ``pom.xml`` ``<properties>`` with ``acli.*`` prefix
+    """Update specific keys in the unified agents-cli-manifest.yaml metadata file.
 
     Args:
         project_dir: Path to the project directory
-        create_params: Dict of keys to update
-            (e.g., ``{"deployment_target": "cloud_run"}``)
-        acli_version: If provided, update the ACLI version field
-        language: Project language (``"python"``, ``"go"``, ``"java"``,
-            ``"typescript"``)
+        create_params: Dict of keys to update inside create_params
+        acli_version: If provided, update acli_version
+        language: Project language (unused now as config file is fixed)
         remove_keys: List of keys to remove from create_params section
 
     Returns:
         True if successful, False otherwise
     """
-    from .language import LANGUAGE_CONFIGS
-
-    lang_config = LANGUAGE_CONFIGS.get(language, LANGUAGE_CONFIGS["python"])
-    config_file = lang_config.get("config_file")
-    config_format = lang_config.get("config_format", "toml")
-    version_key = lang_config.get("version_key", "acli_version")
-
-    if not config_file:
-        return False
-
-    config_path = project_dir / config_file
-    if not config_path.exists():
+    manifest_path = project_dir / "agents-cli-manifest.yaml"
+    if not manifest_path.exists():
+        logging.warning(f"Manifest not found: {manifest_path}")
         return False
 
     try:
-        if config_format == "maven_properties":
-            return _update_maven_acli_metadata(
-                config_path, create_params, acli_version, version_key, remove_keys
-            )
-
-        # TOML format (Python, Go, TypeScript)
-        content = config_path.read_text(encoding="utf-8")
-
-        # Update version field if provided
-        if acli_version:
-            pattern = rf'({re.escape(version_key)}\s*=\s*)"[^"]*"'
-            content = re.sub(pattern, f'\\1"{acli_version}"', content)
-
-        # Update individual keys
-        for key, value in create_params.items():
-            pattern = rf'({re.escape(key)}\s*=\s*)"[^"]*"'
-            replacement = f'\\1"{value}"'
-            content = re.sub(pattern, replacement, content)
-
-        # Remove stale keys
-        if remove_keys:
-            for key in remove_keys:
-                content = re.sub(rf'\n{re.escape(key)}\s*=\s*"[^"]*"', "", content)
-
-        config_path.write_text(content, encoding="utf-8")
-        return True
-    except Exception as e:
-        logging.warning(f"Could not update ACLI metadata in {config_path}: {e}")
-        return False
-
-
-def _update_maven_acli_metadata(
-    pom_path: pathlib.Path,
-    create_params: dict[str, str],
-    acli_version: str | None,
-    version_key: str,
-    remove_keys: list[str] | None = None,
-) -> bool:
-    """Update ACLI metadata in a Maven pom.xml file."""
-    try:
-        content = pom_path.read_text(encoding="utf-8")
+        with open(manifest_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
 
         if acli_version:
-            pattern = rf"(<{re.escape(version_key)}>)[^<]*(</)"
-            content = re.sub(pattern, rf"\g<1>{acli_version}\g<2>", content)
+            data["acli_version"] = acli_version
 
-        for key, value in create_params.items():
-            prop_name = f"acli.{key}"
-            pattern = rf"(<{re.escape(prop_name)}>)[^<]*(</)"
-            content = re.sub(pattern, rf"\g<1>{value}\g<2>", content)
+        if "create_params" not in data or not isinstance(data["create_params"], dict):
+            data["create_params"] = {}
+
+        params = data["create_params"]
+
+        for key, val in create_params.items():
+            params[key] = val
 
         if remove_keys:
             for key in remove_keys:
-                prop_name = f"acli.{key}"
-                content = re.sub(
-                    rf"\s*<{re.escape(prop_name)}>[^<]*</{re.escape(prop_name)}>",
-                    "",
-                    content,
-                )
+                params.pop(key, None)
 
-        pom_path.write_text(content, encoding="utf-8")
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=False)
         return True
     except Exception as e:
-        logging.warning(f"Could not update Maven ACLI metadata in {pom_path}: {e}")
+        logging.warning(f"Could not update ACLI metadata in {manifest_path}: {e}")
         return False
+
+
+def migrate_legacy_python_config(
+    project_dir: pathlib.Path, dry_run: bool = False
+) -> None:
+    """Extract legacy [tool.agents-cli] config from pyproject.toml and write to agents-cli-manifest.yaml."""
+    pyproject_path = project_dir / "pyproject.toml"
+    manifest_path = project_dir / "agents-cli-manifest.yaml"
+
+    if not pyproject_path.exists():
+        return
+
+    content = pyproject_path.read_text(encoding="utf-8")
+
+    with open(pyproject_path, "rb") as f:
+        pyproject_data = tomllib.load(f)
+
+    acli = pyproject_data.get("tool", {}).get("agents-cli")
+    if acli is None:
+        return
+
+    if manifest_path.exists():
+        import click
+
+        click.secho(
+            "  ▸ Legacy [tool.agents-cli] section found in pyproject.toml but agents-cli-manifest.yaml already exists. The legacy config will be ignored and that section can be safely deleted.",
+            fg="yellow",
+            dim=True,
+        )
+        return
+
+    if dry_run:
+        import click
+
+        click.secho(
+            "  ▸ [Dry run] Legacy pyproject.toml configuration would be migrated to agents-cli-manifest.yaml",
+            fg="yellow",
+            dim=True,
+        )
+        return
+
+    # Reconstruct new manifest content
+    manifest_data = {}
+    name = pyproject_data.get("project", {}).get("name") or acli.get("name")
+    if name:
+        manifest_data["name"] = name
+
+    # Copy all config parameters directly, except name
+    for k, v in acli.items():
+        if k != "name" and v is not None:
+            manifest_data[k] = v
+
+    import yaml
+
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(manifest_data, f, default_flow_style=False, sort_keys=False)
+
+    # Remove legacy tool config lines from pyproject.toml last, after manifest write succeeds
+    lines = content.splitlines()
+    new_lines = []
+    skip = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[tool.agents-cli"):
+            skip = True
+            continue
+        if (
+            skip
+            and stripped.startswith("[")
+            and not stripped.startswith("[tool.agents-cli")
+        ):
+            skip = False
+        if not skip:
+            new_lines.append(line)
+    pyproject_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+    import click
+
+    click.secho(
+        "  ▸ Legacy pyproject.toml configuration successfully migrated to agents-cli-manifest.yaml",
+        fg="cyan",
+        dim=True,
+    )
 
 
 def compare_all_files(

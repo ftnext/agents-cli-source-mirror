@@ -20,7 +20,7 @@ from typing import Any
 def metadata_to_cli_args(metadata: dict[str, Any]) -> list[str]:
     """Convert metadata to CLI arguments for re-creating a project.
 
-    Maps [tool.agents-cli] metadata back to CLI arguments.
+    Maps agents-cli-manifest.yaml metadata back to CLI arguments.
     Used by upgrade command to re-template old/new versions.
     """
     args: list[str] = []
@@ -33,7 +33,8 @@ def metadata_to_cli_args(metadata: dict[str, Any]) -> list[str]:
 
     create_params = metadata.get("create_params", {})
     # Skip include_data_ingestion — now auto-derived from agent config and --datastore
-    skip_keys = {"include_data_ingestion"}
+    # Skip is_a2a - not currently a valid option on `create`, despite being grouped that way in config
+    skip_keys = {"include_data_ingestion", "is_a2a"}
     for key, value in create_params.items():
         if key in skip_keys:
             continue

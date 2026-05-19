@@ -31,7 +31,8 @@ import webbrowser
 
 import click
 
-from google.agents.cli._tools import ToolNotFoundError, get_gcloud_path
+from google.agents.cli._runner import run_resolved
+from google.agents.cli._tools import ToolNotFoundError, require_tool
 
 
 class AuthType(enum.Enum):
@@ -92,7 +93,7 @@ def _setup_google_cloud_adc():
 
     # Check if gcloud is installed
     try:
-        gcloud_path = get_gcloud_path()
+        require_tool("gcloud")
     except ToolNotFoundError:
         click.echo("  The Google Cloud CLI (gcloud) is not installed.")
         click.echo()
@@ -137,8 +138,8 @@ def _setup_google_cloud_adc():
     click.echo()
 
     try:
-        result = subprocess.run(
-            [gcloud_path, "auth", "application-default", "login"],
+        result = run_resolved(
+            ["gcloud", "auth", "application-default", "login"],
             timeout=120,
         )
         if result.returncode != 0:
@@ -171,7 +172,7 @@ def _setup_google_cloud_adc():
 def _get_gcloud_account():
     """Get the active gcloud account, if available."""
     try:
-        result = subprocess.run(
+        result = run_resolved(
             ["gcloud", "config", "get-value", "account"],
             capture_output=True,
             text=True,
@@ -379,7 +380,7 @@ def _check_valid_adc():
     # if credentials are missing or invalid, so we use the gcloud version
     # which goes much faster.
     try:
-        subprocess.run(
+        run_resolved(
             ["gcloud", "auth", "application-default", "print-access-token", "--quiet"],
             check=True,
             capture_output=True,

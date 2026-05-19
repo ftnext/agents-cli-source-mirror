@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import subprocess
 
-from google.agents.cli._tools import get_gcloud_path
+from google.agents.cli._runner import run_resolved
 
 
 def run_gcloud_command(
@@ -41,9 +41,8 @@ def run_gcloud_command(
     Returns:
         CompletedProcess instance
     """
-    cmd = [get_gcloud_path(), *args]
-    return subprocess.run(
-        cmd,
+    return run_resolved(
+        ["gcloud", *args],
         check=check,
         capture_output=capture_output,
         text=True,

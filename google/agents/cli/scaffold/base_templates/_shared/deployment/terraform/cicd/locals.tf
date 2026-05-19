@@ -30,7 +30,7 @@ locals {
 {%- if cookiecutter.datastore_type == "agent_platform_vector_search" %}
     "vectorsearch.googleapis.com",
 {%- endif %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
     "sqladmin.googleapis.com",
 {%- endif %}
   ]
@@ -60,7 +60,7 @@ locals {
 {%- if cookiecutter.datastore_type == "agent_platform_vector_search" %}
     "vectorsearch.googleapis.com",
 {%- endif %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
     "sqladmin.googleapis.com",
     "secretmanager.googleapis.com"
 {%- endif %}

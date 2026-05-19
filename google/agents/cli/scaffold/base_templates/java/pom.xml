@@ -35,17 +35,6 @@
     <adk.version>0.5.0</adk.version>
     <junit.version>5.11.4</junit.version>
 
-    <!-- ACLI Metadata -->
-    <acli.name>{{cookiecutter.project_name}}</acli.name>
-    <acli.version>{{cookiecutter.package_version}}</acli.version>
-    <acli.language>java</acli.language>
-    <acli.base_template>{{cookiecutter.agent_name}}</acli.base_template>
-    <acli.agent_directory>src/main/java</acli.agent_directory>
-    <acli.deployment_target>{{cookiecutter.deployment_target}}</acli.deployment_target>
-    <acli.cicd_runner>{{cookiecutter.cicd_runner}}</acli.cicd_runner>
-{%- if cookiecutter.agent_guidance_filename != "GEMINI.md" %}
-    <acli.agent_guidance_filename>{{cookiecutter.agent_guidance_filename}}</acli.agent_guidance_filename>
-{%- endif %}
   </properties>
 
   <dependencies>

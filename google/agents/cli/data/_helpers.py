@@ -18,13 +18,15 @@ import subprocess
 
 import click
 
+from google.agents.cli._runner import run_resolved
+
 
 def resolve_project_id(project: str | None) -> str | None:
     """Resolve project ID from flag or gcloud default."""
     if project:
         return project
     try:
-        result = subprocess.run(
+        result = run_resolved(
             ["gcloud", "config", "get-value", "project"],
             capture_output=True,
             text=True,

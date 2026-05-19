@@ -20,7 +20,7 @@ data "google_project" "project" {
 }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
 
 # Generate a random password for the database user
 resource "random_password" "db_password" {
@@ -329,7 +329,7 @@ resource "kubernetes_pod_disruption_budget_v1" "app_staging" {
 }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
 
 resource "kubernetes_secret_v1" "db_password_staging" {
   provider = kubernetes.staging
@@ -392,7 +392,7 @@ resource "kubernetes_deployment_v1" "app_staging" {
           }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
           env {
             name  = "INSTANCE_CONNECTION_NAME"
             value = google_sql_database_instance.session_db["staging"].connection_name
@@ -485,7 +485,7 @@ resource "kubernetes_deployment_v1" "app_staging" {
           }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
           volume_mount {
             name       = "cloudsql"
             mount_path = "/cloudsql"
@@ -495,7 +495,7 @@ resource "kubernetes_deployment_v1" "app_staging" {
         }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
         container {
           name  = "cloud-sql-proxy"
           image = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.3"
@@ -637,7 +637,7 @@ resource "kubernetes_pod_disruption_budget_v1" "app_prod" {
 }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
 
 resource "kubernetes_secret_v1" "db_password_prod" {
   provider = kubernetes.prod
@@ -700,7 +700,7 @@ resource "kubernetes_deployment_v1" "app_prod" {
           }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
           env {
             name  = "INSTANCE_CONNECTION_NAME"
             value = google_sql_database_instance.session_db["prod"].connection_name
@@ -793,7 +793,7 @@ resource "kubernetes_deployment_v1" "app_prod" {
           }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
           volume_mount {
             name       = "cloudsql"
             mount_path = "/cloudsql"
@@ -803,7 +803,7 @@ resource "kubernetes_deployment_v1" "app_prod" {
         }
 
 {%- if cookiecutter.language == "python" %}
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
         container {
           name  = "cloud-sql-proxy"
           image = "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.3"

@@ -1,0 +1,52 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import json
+import logging
+import os
+from typing import Any, NamedTuple
+
+
+class Experiment(NamedTuple):
+    label: str
+    value_type: type
+    default_value: Any
+
+
+# Central registry of experiments: new experiment flags get added here.
+_REGISTRY: dict[str, Experiment] = {}
+
+
+def resolve_experiment(label: str) -> Any:
+    """Returns the value for the given experiment label."""
+    if label not in _REGISTRY:
+        raise ValueError(f"Unknown experiment: {label}")
+
+    exp = _REGISTRY[label]
+
+    # Check for environment variable override
+    env_val = os.environ.get("AGENTS_CLI_EXPERIMENTS")
+    if env_val:
+        try:
+            overrides = json.loads(env_val)
+            if label in overrides:
+                val = overrides[label]
+                # Cast to correct type if necessary
+                return exp.value_type(val)
+        except json.JSONDecodeError as e:
+            logging.warning(
+                f"Failed to parse AGENTS_CLI_EXPERIMENTS as JSON, no experiment overrides will be applied: {e}"
+            )
+
+    return exp.default_value

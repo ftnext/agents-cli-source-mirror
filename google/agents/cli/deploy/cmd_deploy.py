@@ -20,44 +20,73 @@ import sys
 
 import click
 
+from google.agents.cli import _tools
 from google.agents.cli._project import (
     ProjectConfig,
     chdir_project_root,
     check_cli_version,
+    find_project_root,
     read_project_config,
     require_deployment_target,
 )
-from google.agents.cli._runner import run
-from google.agents.cli._tools import require_tool
+from google.agents.cli._runner import popen_resolved, run, run_resolved
 from google.agents.cli.deploy._utils import parse_key_value_pairs
+from google.agents.cli.deploy.agent_runtime import (
+    check_agent_runtime_operation,
+    deploy_agent_runtime,
+)
+from google.agents.cli.scaffold.utils.language import get_project_version
 
 
-def deploy_agent_runtime(*args, **kwargs):
-    """Lazy-loading wrapper for deploy_agent_runtime.
+def _build_psc_interface_config(
+    *,
+    network_attachment: str | None,
+    dns_peering_domain: str | None,
+    dns_peering_project: str | None,
+    dns_peering_network: str | None,
+) -> dict | None:
+    """Build a PSC interface config dict from CLI flags.
 
-    The underlying module imports heavy Google Cloud and Vertex AI SDKs.
-    We defer the import until execution to keep the CLI's startup fast,
-    while keeping this wrapper at the module level to support unit test patching.
+    Returns None when no networking flags are set.
+    Raises ClickException when DNS peering flags are used without --network-attachment.
     """
-    from google.agents.cli.deploy.agent_runtime import (
-        deploy_agent_runtime as _deploy_agent_runtime,
-    )
+    has_dns_peering = any([dns_peering_domain, dns_peering_project, dns_peering_network])
 
-    return _deploy_agent_runtime(*args, **kwargs)
+    if not network_attachment and not has_dns_peering:
+        return None
 
+    if not network_attachment and has_dns_peering:
+        raise click.ClickException(
+            "--dns-peering-domain, --dns-peering-project, and --dns-peering-network "
+            "require --network-attachment.\n"
+            "  PSC DNS peering is only valid when a network attachment is configured."
+        )
 
-def check_agent_runtime_operation(*args, **kwargs):
-    """Lazy-loading wrapper for check_agent_runtime_operation.
+    config: dict = {"network_attachment": network_attachment}
 
-    The underlying module imports heavy Google Cloud and Vertex AI SDKs.
-    We defer the import until execution to keep the CLI's startup fast,
-    while keeping this wrapper at the module level to support unit test patching.
-    """
-    from google.agents.cli.deploy.agent_runtime import (
-        check_agent_runtime_operation as _check_agent_runtime_operation,
-    )
+    if has_dns_peering:
+        if not all([dns_peering_domain, dns_peering_project, dns_peering_network]):
+            missing = []
+            if not dns_peering_domain:
+                missing.append("--dns-peering-domain")
+            if not dns_peering_project:
+                missing.append("--dns-peering-project")
+            if not dns_peering_network:
+                missing.append("--dns-peering-network")
+            raise click.ClickException(
+                f"Incomplete DNS peering configuration — missing: {', '.join(missing)}.\n"
+                "  All three flags (--dns-peering-domain, --dns-peering-project, "
+                "--dns-peering-network) must be provided together."
+            )
+        config["dns_peering_configs"] = [
+            {
+                "domain": dns_peering_domain,
+                "target_project": dns_peering_project,
+                "target_network": dns_peering_network,
+            }
+        ]
 
-    return _check_agent_runtime_operation(*args, **kwargs)
+    return config
 
 
 @click.command("deploy")
@@ -130,6 +159,28 @@ def check_agent_runtime_operation(*args, **kwargs):
     default=False,
     help="Skip project confirmation prompt.",
 )
+@click.option(
+    "--network-attachment",
+    default=None,
+    help="Network attachment resource name for PSC interface (Agent Runtime). "
+    "Enables private VPC connectivity. "
+    "Format: projects/PROJECT/regions/REGION/networkAttachments/NAME",
+)
+@click.option(
+    "--dns-peering-domain",
+    default=None,
+    help="DNS peering domain suffix, e.g. 'my-internal.corp.' (Agent Runtime, requires --network-attachment).",
+)
+@click.option(
+    "--dns-peering-project",
+    default=None,
+    help="Project ID hosting the Cloud DNS managed zone for DNS peering (Agent Runtime, requires --network-attachment).",
+)
+@click.option(
+    "--dns-peering-network",
+    default=None,
+    help="VPC network name in the target project for DNS peering (Agent Runtime, requires --network-attachment).",
+)
 def cmd_deploy(
     *,
     project,
@@ -149,11 +200,15 @@ def cmd_deploy(
     status,
     interactive,
     no_confirm_project,
+    network_attachment,
+    dns_peering_domain,
+    dns_peering_project,
+    dns_peering_network,
 ):
     """Deploy the agent.
 
     \b
-    Dispatches by deployment target configured in pyproject.toml:
+    Dispatches by deployment target configured in agents-cli-manifest.yaml:
       agent_runtime → Agent Runtime deployment
       cloud_run    → gcloud beta run deploy
       gke          → terraform + docker build + kubectl apply
@@ -214,11 +269,31 @@ def cmd_deploy(
         ):
             raise click.ClickException("Aborted by user.")
 
+    # Build PSC interface config from networking flags
+    psc_interface_config = _build_psc_interface_config(
+        network_attachment=network_attachment,
+        dns_peering_domain=dns_peering_domain,
+        dns_peering_project=dns_peering_project,
+        dns_peering_network=dns_peering_network,
+    )
+
+    if psc_interface_config and cfg.deployment_target != "agent_runtime":
+        raise click.ClickException(
+            "--network-attachment and --dns-peering-* flags are only supported "
+            f"for Agent Runtime deployments (current target: {cfg.deployment_target})."
+        )
+
     if cfg.deployment_target == "agent_runtime":
         if dry_run:
-            click.echo(
-                f"  Would deploy to Agent Runtime: project={project}, region={region}"
-            )
+            msg = f"  Would deploy to Agent Runtime: project={project}, region={region}"
+            if psc_interface_config:
+                msg += f"\n  PSC network attachment: {psc_interface_config['network_attachment']}"
+                for dc in psc_interface_config.get("dns_peering_configs", []):
+                    msg += (
+                        f"\n  DNS peering: {dc['domain']}"
+                        f" → {dc['target_project']}/{dc['target_network']}"
+                    )
+            click.echo(msg)
             return
         deploy_agent_runtime(
             cfg=cfg,
@@ -229,10 +304,11 @@ def cmd_deploy(
             service_account=service_account,
             agent_identity=agent_identity,
             no_wait=no_wait,
+            psc_interface_config=psc_interface_config,
         )
 
     elif cfg.deployment_target == "cloud_run":
-        require_tool(
+        _tools.require_tool(
             "gcloud",
             "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install",
         )
@@ -259,12 +335,13 @@ def cmd_deploy(
 
         # Inject environment variables (AGENT_VERSION auto-set, user can override)
         env_var_map = parse_key_value_pairs(update_env_vars)
-        env_var_map.setdefault("AGENT_VERSION", cfg.version)
+        project_root = find_project_root() or "."
+        env_var_map.setdefault("AGENT_VERSION", get_project_version(project_root))
 
         # Set APP_URL so the service knows its own URL (used by A2A agent cards, etc.)
         if "APP_URL" not in env_var_map and project:
             try:
-                result = subprocess.run(
+                result = run_resolved(
                     [
                         "gcloud",
                         "projects",
@@ -300,7 +377,7 @@ def cmd_deploy(
         click.secho(f"  ▸ {cmd_str}", fg="cyan", dim=True)
 
         # Stream stdout and stderr to terminal in real time, capturing stderr for error detection
-        process = subprocess.Popen(
+        process = popen_resolved(
             args, stdout=sys.stdout, stderr=subprocess.PIPE, text=True
         )
 
@@ -344,7 +421,7 @@ def cmd_deploy(
     else:
         raise click.ClickException(
             f"Unknown deployment target: {cfg.deployment_target}. "
-            "Set [tool.agents-cli] deployment_target in pyproject.toml."
+            "Set deployment_target in agents-cli-manifest.yaml."
         )
 
 
@@ -376,7 +453,7 @@ def _check_deploy_status(cfg: ProjectConfig, project: str, region: str) -> None:
 
 def _check_cloud_run_status(cfg: ProjectConfig, project: str | None, region: str) -> None:
     """Check the status of the Cloud Run service."""
-    require_tool(
+    _tools.require_tool(
         "gcloud",
         "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install",
     )
@@ -467,16 +544,18 @@ def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
         "kubernetes_horizontal_pod_autoscaler_v2.app",
         "kubernetes_pod_disruption_budget_v1.app",
     ]
-    require_tool(
+    _tools.require_tool(
         "gcloud",
         "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install",
     )
-    require_tool("kubectl", "Install kubectl: https://kubernetes.io/docs/tasks/tools/")
+    _tools.require_tool(
+        "kubectl", "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
+    )
     service_name = cfg.project_name or "agent"
     cluster_name = cluster_name or service_name
 
     if not image:
-        require_tool(
+        _tools.require_tool(
             "terraform",
             "Install Terraform: https://developer.hashicorp.com/terraform/install",
         )
@@ -677,7 +756,7 @@ def _list_agent_runtime_deployments(project: str | None, location: str) -> None:
 
 def _list_cloud_run_deployments(project: str | None, region: str | None) -> None:
     """List Cloud Run services via gcloud."""
-    require_tool(
+    _tools.require_tool(
         "gcloud",
         "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install",
     )
@@ -745,7 +824,9 @@ def _list_cloud_run_deployments(project: str | None, region: str | None) -> None
 
 def _list_gke_deployments() -> None:
     """List GKE deployments via kubectl."""
-    require_tool("kubectl", "Install kubectl: https://kubernetes.io/docs/tasks/tools/")
+    _tools.require_tool(
+        "kubectl", "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
+    )
 
     result = run(
         ["kubectl", "get", "deployments", "-o", "json"],

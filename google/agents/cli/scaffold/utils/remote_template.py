@@ -198,11 +198,13 @@ def fetch_remote_template(
             str(repo_path),
         ]
 
+        from google.agents.cli._runner import run_resolved
+
         logging.debug(
             f"Attempting to clone remote template with Git: {shlex.join(clone_cmd)}"
         )
         # GIT_TERMINAL_PROMPT=0 prevents git from prompting for credentials
-        result = subprocess.run(
+        result = run_resolved(
             clone_cmd,
             capture_output=True,
             text=True,
@@ -227,7 +229,7 @@ def fetch_remote_template(
                     clone_url,
                     str(repo_path),
                 ]
-                subprocess.run(
+                run_resolved(
                     clone_cmd_without_single_branch,
                     capture_output=True,
                     text=True,
@@ -364,12 +366,11 @@ def load_remote_template_config(
     cli_overrides: dict[str, Any] | None = None,
     is_adk_sample: bool = False,
 ) -> dict[str, Any]:
-    """Load template configuration from remote template's pyproject.toml with CLI overrides.
+    """Load template configuration from remote template's agents-cli-manifest.yaml
+    (or legacy [tool.agents-cli] section in pyproject.toml) with CLI overrides.
 
-    Loads configuration from [tool.agents-cli] section with fallbacks
-    to [project] section for name and description if not specified. CLI overrides
-    take precedence over all other sources. For ADK samples without explicit config,
-    uses smart inference for agent directory naming.
+    CLI overrides take precedence over all other sources. For ADK samples without
+    explicit config, uses smart inference for agent directory naming.
 
     Args:
         template_dir: Path to template directory
@@ -391,9 +392,23 @@ def load_remote_template_config(
     }
     config.update(defaults)
 
-    # Load from pyproject.toml if it exists
+    # Load from agents-cli-manifest.yaml or pyproject.toml
+    manifest_path = template_dir / "agents-cli-manifest.yaml"
     pyproject_path = template_dir / "pyproject.toml"
-    if pyproject_path.exists():
+
+    if manifest_path.exists():
+        try:
+            import yaml
+
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest_config = yaml.safe_load(f) or {}
+            has_explicit_config = bool(manifest_config)
+            if manifest_config:
+                config.update(manifest_config)
+                logging.debug("Found explicit agents-cli-manifest.yaml configuration")
+        except Exception as e:
+            logging.error(f"Error loading agents-cli-manifest.yaml config: {e}")
+    elif pyproject_path.exists():
         try:
             with open(pyproject_path, "rb") as f:
                 pyproject_data = tomllib.load(f)
@@ -423,14 +438,14 @@ def load_remote_template_config(
         except Exception as e:
             logging.error(f"Error loading pyproject.toml config: {e}")
     else:
-        # No pyproject.toml found
+        # No config file found
         if is_adk_sample:
             logging.debug(
-                f"No pyproject.toml found for ADK sample {template_dir.name}, will use inference"
+                f"No config file found for ADK sample {template_dir.name}, will use inference"
             )
         else:
             logging.debug(
-                f"No pyproject.toml found for template {template_dir.name}, using defaults"
+                f"No config file found for template {template_dir.name}, using defaults"
             )
 
     # Apply ADK inference if no explicit config and this is an ADK sample

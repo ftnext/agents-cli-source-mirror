@@ -27,6 +27,18 @@ _GCLOUD_RELATIVE_PATH = (
     Path("Google") / "Cloud SDK" / "google-cloud-sdk" / "bin" / "gcloud.cmd"
 )
 
+# Default installation hints for common tools.
+# These are used as fallbacks in require_tool when no specific hint is provided,
+# ensuring helpful error messages even when tools are resolved implicitly (e.g. via run_resolved).
+DEFAULT_INSTALL_HINTS = {
+    "npx": "Install Node.js (https://nodejs.org/en/download) and try again.",
+    "npm": "Install Node.js (https://nodejs.org/en/download) and try again.",
+    "gcloud": "Install the Google Cloud SDK (https://cloud.google.com/sdk/docs/install) and ensure it is in your PATH.",
+    "terraform": "Install Terraform (https://developer.hashicorp.com/terraform/downloads) and ensure it is in your PATH.",
+    "gh": "Install the GitHub CLI (https://cli.github.com/) and ensure it is in your PATH.",
+    "git": "Install Git (https://git-scm.com/downloads) and ensure it is in your PATH.",
+}
+
 
 class ToolNotFoundError(click.ClickException):
     """Raised when a required external tool is not found on PATH."""
@@ -94,7 +106,7 @@ def require_tool(name: str, install_hint: str = "") -> str:
     1. Checks if the tool's path is already cached in `_tool_paths`.
     2. If not cached, searches for the tool using `shutil.which` with the default PATH.
     3. If not found and running on Windows, searches again using `shutil.which` with a cleaned PATH.
-    4. If not found and the tool is 'gcloud', attempts to find it in common Windows fallback paths.
+    4. If not found and the tool is 'gcloud', attempts to find in common Windows fallback paths.
     5. If still not found, raises a `ToolNotFoundError` with an optional install hint.
     6. If found, caches the path and returns it.
     """
@@ -112,57 +124,10 @@ def require_tool(name: str, install_hint: str = "") -> str:
 
         if path is None:
             msg = f"'{name}' is not installed or not on PATH."
-            if install_hint:
-                msg += f"\n  {install_hint}"
+            hint = install_hint or DEFAULT_INSTALL_HINTS.get(name, "")
+            if hint:
+                msg += f"\n  {hint}"
             raise ToolNotFoundError(msg)
 
     _tool_paths[name] = path
     return path
-
-
-def get_npx_path() -> str:
-    """Get the path to npx, raising an exception if not found."""
-    return require_tool(
-        "npx",
-        install_hint="Install Node.js (https://nodejs.org/en/download) and try again.",
-    )
-
-
-def get_npm_path() -> str:
-    """Get the path to npm, raising an exception if not found."""
-    return require_tool(
-        "npm",
-        install_hint="Install Node.js (https://nodejs.org/en/download) and try again.",
-    )
-
-
-def get_gcloud_path() -> str:
-    """Get the path to gcloud, raising an exception if not found."""
-    return require_tool(
-        "gcloud",
-        install_hint="Install the Google Cloud SDK (https://cloud.google.com/sdk/docs/install) and ensure it is in your PATH.",
-    )
-
-
-def get_terraform_path() -> str:
-    """Get the path to terraform, raising an exception if not found."""
-    return require_tool(
-        "terraform",
-        install_hint="Install Terraform (https://developer.hashicorp.com/terraform/downloads) and ensure it is in your PATH.",
-    )
-
-
-def get_gh_path() -> str:
-    """Get the path to gh, raising an exception if not found."""
-    return require_tool(
-        "gh",
-        install_hint="Install the GitHub CLI (https://cli.github.com/) and ensure it is in your PATH.",
-    )
-
-
-def get_git_path() -> str:
-    """Get the path to git, raising an exception if not found."""
-    return require_tool(
-        "git",
-        install_hint="Install Git (https://git-scm.com/downloads) and ensure it is in your PATH.",
-    )

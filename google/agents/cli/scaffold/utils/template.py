@@ -75,7 +75,7 @@ def resolve_agent_alias(name: str | None) -> str | None:
 # This replaces Jinja2 conditionals in filenames for Windows compatibility.
 #
 # Format: "relative/path/to/file_or_dir": lambda config: bool_condition
-# The config dict contains: agent_name, cicd_runner, is_adk, is_adk_live, is_a2a
+# The config dict contains: agent_name, cicd_runner, is_adk_live, is_a2a
 # =============================================================================
 
 
@@ -100,8 +100,6 @@ CONDITIONAL_FILES = {
     # Agent-specific conditional files
     "{agent_directory}/app_utils/gcs.py": (lambda c: c.get("agent_name") == "adk_live"),
     "{agent_directory}/app_utils/expose_app.py": lambda c: c.get("is_adk_live"),
-    "{agent_directory}/app_utils/converters": lambda c: c.get("is_a2a"),
-    "{agent_directory}/app_utils/executor": lambda c: c.get("is_a2a"),
     "tests/helpers.py": lambda c: c.get("is_a2a"),
     # Agent Runtime deployment target conditionals
     "deployment/terraform/cicd/service.tf": _exclude_adk_live_agent_runtime,
@@ -186,7 +184,7 @@ def apply_conditional_files(
     Args:
         project_path: Path to the generated project directory
         config: Configuration dict with keys: agent_name, cicd_runner,
-                is_adk, is_adk_live, is_a2a
+                is_adk_live, is_a2a
         agent_directory: Name of the agent directory (replaces {agent_directory} placeholder)
     """
     for rel_path_template, condition_fn in CONDITIONAL_FILES.items():
@@ -269,9 +267,12 @@ def _add_dependencies(
         else:
             console.print(f"\n✓ Running: uv add {deps_str}", style="bold cyan")
 
+        from google.agents.cli._runner import run_resolved
+        from google.agents.cli._tools import ToolNotFoundError
+
         # Run uv add in the project directory
         cmd = ["uv", "add", *dependencies]
-        result = subprocess.run(
+        result = run_resolved(
             cmd,
             cwd=project_path,
             capture_output=True,
@@ -299,7 +300,7 @@ def _add_dependencies(
         console.print(f"      cd {project_path.name}", style="dim")
         console.print(f"      uv add {deps_str}\n", style="dim")
         return False
-    except FileNotFoundError:
+    except ToolNotFoundError:
         console.print(
             "\n✗ uv command not found. Please install uv first.", style="bold red"
         )
@@ -1059,6 +1060,74 @@ app = App(root_agent=root_agent, name="{agent_directory}")
         )
 
 
+def should_keep_single_project_terraform(
+    deployment_target: str | None,
+    datastore: str | None,
+    include_data_ingestion: bool,
+) -> bool:
+    """Decide whether to preserve `deployment/terraform/single-project/` (and `shared/`)
+    when scaffolding without CI/CD.
+
+    Kept when either:
+      - data ingestion needs the search-datastore terraform (works even with no deployment target), or
+      - a real deployment target was selected (anything but `none`).
+    """
+    has_search_datastore = include_data_ingestion and datastore in (
+        "agent_platform_search",
+        "agent_platform_vector_search",
+    )
+    return has_search_datastore or deployment_target != "none"
+
+
+def apply_prototype_deployment_cleanup(
+    deployment_dir: pathlib.Path,
+    deployment_target: str | None,
+    datastore: str | None,
+    include_data_ingestion: bool,
+) -> None:
+    """Prune `deployment/` after scaffolding in prototype/minimal mode (`cicd_runner == "skip"`).
+
+    Either preserves `terraform/{single-project,shared,scripts}` plus `k8s/`
+    (and removes everything else under `deployment/`), or removes the whole
+    `deployment/` dir — based on `should_keep_single_project_terraform`.
+    No-op if `deployment_dir` does not exist.
+    """
+    if not deployment_dir.exists():
+        return
+
+    keep = should_keep_single_project_terraform(
+        deployment_target=deployment_target,
+        datastore=datastore,
+        include_data_ingestion=include_data_ingestion,
+    )
+    if not keep:
+        shutil.rmtree(deployment_dir)
+        logging.debug(f"Prototype mode: deleted {deployment_dir}")
+        return
+
+    # Keep single-project/ + shared/ (observability: telemetry.tf, BigQuery schemas); drop cicd/
+    terraform_dir = deployment_dir / "terraform"
+    terraform_dirs_to_keep = {"single-project", "shared", "scripts"}
+    if terraform_dir.exists():
+        for item in terraform_dir.iterdir():
+            if item.name not in terraform_dirs_to_keep:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+    # Remove non-terraform, non-k8s deployment files
+    deployment_dirs_to_keep = {"terraform", "k8s"}
+    for item in deployment_dir.iterdir():
+        if item.name not in deployment_dirs_to_keep:
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+    logging.debug(
+        f"Prototype mode: preserved deployment/terraform/single-project/ and shared/, removed cicd/ in {deployment_dir}"
+    )
+
+
 def process_template(
     *,
     agent_name: str,
@@ -1213,7 +1282,7 @@ def process_template(
             project_template.mkdir(parents=True)
 
             # Get agent directory and language from the already-loaded template_config
-            language = get_agent_language(agent_name, remote_config)
+            language = get_agent_language(agent_name, template_config)
             agent_directory = get_agent_directory(
                 template_config, cli_overrides, language
             )
@@ -1411,7 +1480,6 @@ def process_template(
                 "example_question": template_config.get("example_question", "").ljust(61),
                 "settings": settings,
                 "tags": tags,
-                "is_adk": "adk" in tags,
                 "is_adk_live": "adk_live" in tags,
                 "is_a2a": "a2a" in tags,
                 "requires_data_ingestion": settings.get("requires_data_ingestion", False),
@@ -1516,22 +1584,17 @@ def process_template(
                     )
                 logging.debug("Remote template files copied successfully")
 
-                # Handle ADK agent compatibility
-                is_adk = "adk" in base_template_name.lower()
+                # ADK agent compatibility: prefer YAML shim, otherwise inject
+                # the app object into agent.py if missing.
                 agent_py_path = generated_project_dir / agent_directory / "agent.py"
                 root_agent_yaml = (
                     generated_project_dir / agent_directory / "root_agent.yaml"
                 )
 
-                if is_adk:
-                    # Check for YAML config agent first
-                    if root_agent_yaml.exists():
-                        _generate_yaml_agent_shim(agent_py_path, agent_directory, console)
-                    elif agent_py_path.exists():
-                        # Inject app object if missing (backward compatibility)
-                        _inject_app_object_if_missing(
-                            agent_py_path, agent_directory, console
-                        )
+                if root_agent_yaml.exists():
+                    _generate_yaml_agent_shim(agent_py_path, agent_directory, console)
+                elif agent_py_path.exists():
+                    _inject_app_object_if_missing(agent_py_path, agent_directory, console)
 
             # Move the generated project to the final destination
             generated_project_dir = temp_path / project_name
@@ -1607,7 +1670,6 @@ def process_template(
                 "agent_name": agent_name,
                 "deployment_target": deployment_target,
                 "cicd_runner": cicd_runner or "google_cloud_build",
-                "is_adk": "adk" in tags,
                 "is_adk_live": "adk_live" in tags,
                 "is_a2a": "a2a" in tags,
                 "datastore_type": datastore if datastore else "",
@@ -1637,43 +1699,12 @@ def process_template(
 
             # Clean up additional files for prototype/minimal mode (cicd_runner == "skip")
             if cicd_runner == "skip":
-                # Remove deployment folder
-                deployment_dir = final_destination / "deployment"
-                if deployment_dir.exists():
-                    keep_deployment_dev = (
-                        include_data_ingestion
-                        and datastore
-                        in (
-                            "agent_platform_search",
-                            "agent_platform_vector_search",
-                        )
-                    ) or deployment_target == "gke"
-                    if keep_deployment_dev:
-                        # Keep dev terraform for datastore/GKE setup, remove staging/prod
-                        # Also keep shared/ since dev/telemetry.tf references ../shared/
-                        terraform_dir = deployment_dir / "terraform"
-                        dirs_to_keep = {"single-project", "shared", "scripts"}
-                        if terraform_dir.exists():
-                            for item in terraform_dir.iterdir():
-                                if item.name not in dirs_to_keep:
-                                    if item.is_dir():
-                                        shutil.rmtree(item)
-                                    else:
-                                        item.unlink()
-                        # Remove non-terraform, non-k8s deployment files
-                        deployment_dirs_to_keep = {"terraform", "k8s"}
-                        for item in deployment_dir.iterdir():
-                            if item.name not in deployment_dirs_to_keep:
-                                if item.is_dir():
-                                    shutil.rmtree(item)
-                                else:
-                                    item.unlink()
-                        logging.debug(
-                            f"Prototype mode: preserved deployment/terraform/single-project/, cleaned rest of {deployment_dir}"
-                        )
-                    else:
-                        shutil.rmtree(deployment_dir)
-                        logging.debug(f"Prototype mode: deleted {deployment_dir}")
+                apply_prototype_deployment_cleanup(
+                    deployment_dir=final_destination / "deployment",
+                    deployment_target=deployment_target,
+                    datastore=datastore,
+                    include_data_ingestion=include_data_ingestion,
+                )
 
                 # Remove load_test folder
                 load_test_dir = final_destination / "tests" / "load_test"

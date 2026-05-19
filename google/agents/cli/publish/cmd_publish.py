@@ -29,6 +29,8 @@ from packaging import version
 from rich.console import Console
 from rich.table import Table
 
+from google.agents.cli._runner import run_resolved
+from google.agents.cli._tools import ToolNotFoundError
 from google.agents.cli.auth import get_access_token, get_id_token
 from google.agents.cli.scaffold.utils.command import run_gcloud_command
 from google.agents.cli.scaffold.utils.gcp import (
@@ -124,7 +126,7 @@ def _run_sdk_upgrade() -> bool:
     """
     console.print("\n[blue]Upgrading SDK from git (this may take a minute)...[/blue]")
     try:
-        result = subprocess.run(
+        result = run_resolved(
             ["uv", "add", _SDK_UPGRADE_PACKAGE],
             capture_output=True,
             text=True,
@@ -144,7 +146,8 @@ def _run_sdk_upgrade() -> bool:
         console.print(f"\nYou can manually run:\n  {_SDK_UPGRADE_COMMAND}")
         return False
 
-    except FileNotFoundError:
+    except ToolNotFoundError:
+        # run_resolved raises ToolNotFoundError if it cannot find the executable (e.g., 'uv')
         console_err.print(
             "\n[yellow]⚠️  'uv' command not found. Please run manually:[/yellow]"
         )
@@ -283,7 +286,7 @@ def _build_api_headers(
     access_token: str,
     project_id: str,
     content_type: bool = False,
-) -> dict[str, str]:
+) -> dict[str, str | bytes]:
     """Build headers for Discovery Engine API requests with user-agent.
 
     Args:
@@ -294,7 +297,7 @@ def _build_api_headers(
     Returns:
         Headers dictionary
     """
-    headers = {
+    headers: dict[str, str | bytes] = {
         "Authorization": f"Bearer {access_token}",
         "x-goog-user-project": project_id,
         "User-Agent": get_user_agent(),
@@ -364,7 +367,7 @@ def fetch_agent_card_from_url(url: str) -> dict | None:
             f"⚠️  HTTP error fetching agent card from {url}: {e}",
             style="yellow",
         )
-        if e.response.status_code == 401 or e.response.status_code == 403:
+        if e.response is not None and e.response.status_code in (401, 403):
             console_err.print(
                 "  Authentication failed. Ensure you are logged in with 'gcloud auth application-default login'",
                 style="yellow",
@@ -1212,18 +1215,7 @@ def _list_gemini_enterprise_apps(project_id: str | None) -> None:
     console.print(table)
 
 
-@click.group("publish")
-def publish_group():
-    """Publish agents to various targets.
-
-    \b
-    Subcommands:
-      gemini-enterprise  Register an Agent Runtime to Gemini Enterprise
-    """
-    pass
-
-
-@publish_group.command("gemini-enterprise")
+@click.command("gemini-enterprise")
 @click.option(
     "--agent-runtime-id",
     envvar="AGENT_RUNTIME_ID",

@@ -35,6 +35,9 @@ dist/
 *.tfstate.*
 *.tfplan
 
+# ADK
+.adk/
+
 # OS files
 .DS_Store
 Thumbs.db

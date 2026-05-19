@@ -22,7 +22,7 @@ output "gke_cluster_endpoint" {
   value       = google_container_cluster.app.endpoint
 }
 
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
 
 output "instance_connection_name" {
   value = google_sql_database_instance.session_db.connection_name

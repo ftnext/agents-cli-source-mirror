@@ -21,6 +21,8 @@ import sys
 
 import click
 
+from google.agents.cli import _tools
+
 
 def run(
     args: list[str],
@@ -33,6 +35,7 @@ def run(
     check_err_msg: str | None = None,
     input_data: bytes | None = None,
     timeout: int | None = None,
+    resolve_executable: bool = True,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess, streaming output by default.
 
@@ -48,6 +51,9 @@ def run(
             Defaults to True.
         check_err_msg: Error message prefix for check failures.
         input_data: Bytes to feed to stdin of the subprocess.
+        timeout: Timeout in seconds for the subprocess.
+        resolve_executable: If True, resolve the executable path using require_tool.
+            Defaults to True.
 
     Returns:
         CompletedProcess instance.
@@ -61,8 +67,9 @@ def run(
         run_env = {**os.environ, **env}
 
     if capture:
-        result = subprocess.run(
+        result = run_resolved(
             args,
+            resolve_executable=resolve_executable,
             capture_output=True,
             text=input_data is None,
             cwd=cwd,
@@ -71,8 +78,9 @@ def run(
             timeout=timeout,
         )
     else:
-        result = subprocess.run(
+        result = run_resolved(
             args,
+            resolve_executable=resolve_executable,
             stdout=sys.stdout,
             stderr=sys.stderr,
             cwd=cwd,
@@ -86,3 +94,61 @@ def run(
         raise click.ClickException(f"{error_msg} (exit code {result.returncode})")
 
     return result
+
+
+def run_resolved(
+    args: list[str], *, resolve_executable: bool = True, **kwargs
+) -> subprocess.CompletedProcess:
+    """Wrapper around subprocess.run with optional executable resolution.
+
+    Args:
+        args: Command and arguments as a list of strings.
+        resolve_executable: If True, resolve the executable path using require_tool.
+            Defaults to True.
+        **kwargs: Additional keyword arguments passed to subprocess.run.
+
+    Raises:
+        ToolNotFoundError: If resolve_executable is True and the tool cannot be found.
+
+    Returns:
+        CompletedProcess instance.
+    """
+    if isinstance(args, str):
+        raise ValueError("args must be a list of strings, not a single string.")
+
+    if resolve_executable and args:
+        executable = args[0]
+        # Create a shallow copy to avoid modifying the original list passed by reference
+        args = args.copy()
+        args[0] = _tools.require_tool(executable)
+
+    return subprocess.run(args, **kwargs)
+
+
+def popen_resolved(
+    args: list[str], *, resolve_executable: bool = True, **kwargs
+) -> subprocess.Popen:
+    """Wrapper around subprocess.Popen with optional executable resolution.
+
+    Args:
+        args: Command and arguments as a list of strings.
+        resolve_executable: If True, resolve the executable path using require_tool.
+            Defaults to True.
+        **kwargs: Additional keyword arguments passed to subprocess.Popen.
+
+    Raises:
+        ToolNotFoundError: If resolve_executable is True and the tool cannot be found.
+
+    Returns:
+        Popen instance.
+    """
+    if isinstance(args, str):
+        raise ValueError("args must be a list of strings, not a single string.")
+
+    if resolve_executable and args:
+        executable = args[0]
+        # Create a shallow copy to avoid modifying the original list passed by reference
+        args = args.copy()
+        args[0] = _tools.require_tool(executable)
+
+    return subprocess.Popen(args, **kwargs)

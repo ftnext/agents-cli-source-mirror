@@ -325,7 +325,6 @@ class ChatStreamUser(HttpUser):
         """Simulates a chat stream interaction."""
         headers = {"Content-Type": "application/json"}
         headers["Authorization"] = f"Bearer {os.environ['_AUTH_TOKEN']}"
-{% if cookiecutter.is_adk %}
         data = {
             "class_method": "async_stream_query",
             "input": {
@@ -333,33 +332,13 @@ class ChatStreamUser(HttpUser):
                 "message": "Hi!",
             },
         }
-{% else %}
-        data = {
-            "input": {
-                "input": {
-                    "messages": [
-                        {"type": "human", "content": "Hello, AI!"},
-                        {"type": "ai", "content": "Hello!"},
-                        {"type": "human", "content": "How are you?"},
-                    ]
-                },
-                "config": {
-                    "metadata": {"user_id": "test-user", "session_id": "test-session"}
-                },
-            }
-        }
-{% endif %}
         start_time = time.time()
         with self.client.post(
             url_path,
             headers=headers,
             json=data,
             catch_response=True,
-{%- if cookiecutter.is_adk %}
             name="/streamQuery async_stream_query",
-{%- else %}
-            name="/stream_messages first message",
-{%- endif %}
             stream=True,
             params={"alt": "sse"},
         ) as response:
@@ -408,11 +387,7 @@ class ChatStreamUser(HttpUser):
                 if not has_error:
                     self.environment.events.request.fire(
                         request_type="POST",
-{%- if cookiecutter.is_adk %}
                         name="/streamQuery end",
-{%- else %}
-                        name="/stream_messages end",
-{%- endif %}
                         response_time=total_time * 1000,  # Convert to milliseconds
                         response_length=len(events),
                         response=response,

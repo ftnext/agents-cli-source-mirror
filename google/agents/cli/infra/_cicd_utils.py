@@ -28,7 +28,7 @@ import backoff
 import click
 from rich.prompt import IntPrompt, Prompt
 
-from google.agents.cli._tools import get_gcloud_path, get_gh_path, get_terraform_path
+from google.agents.cli._runner import popen_resolved, run_resolved
 
 
 def setup_git_provider(non_interactive: bool = False) -> str:
@@ -73,9 +73,7 @@ def setup_repository_name(
     click.secho("\n> Repository Configuration", bold=True, fg="blue")
 
     # Get current GitHub username
-    result = run_command(
-        [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
-    )
+    result = run_command(["gh", "api", "user", "--jq", ".login"], capture_output=True)
     github_username = result.stdout.strip()
 
     # Get repository name
@@ -112,7 +110,7 @@ def create_github_connection(
     )
 
     def try_create_connection() -> subprocess.CompletedProcess[str]:
-        gcloud_cmd = get_gcloud_path()
+        gcloud_cmd = "gcloud"
         cmd = [
             gcloud_cmd,
             "builds",
@@ -128,7 +126,7 @@ def create_github_connection(
         click.echo(f"\n🔄 Running command: {shlex.join(cmd)}")
 
         # Use Popen to get control over stdin
-        process = subprocess.Popen(
+        process = popen_resolved(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -178,7 +176,7 @@ def create_github_connection(
         try:
             result = run_command(
                 [
-                    get_gcloud_path(),
+                    "gcloud",
                     "builds",
                     "connections",
                     "describe",
@@ -325,7 +323,7 @@ def require_apis_enabled(project_id: str, apis: list[str]) -> None:
             # Check if API is enabled
             result = run_command(
                 [
-                    get_gcloud_path(),
+                    "gcloud",
                     "services",
                     "list",
                     f"--project={project_id}",
@@ -364,7 +362,7 @@ def require_apis_enabled(project_id: str, apis: list[str]) -> None:
     ),
 )
 def run_command(
-    cmd: list[str] | str,
+    cmd: list[str],
     *,
     check: bool = True,
     cwd: Path | None = None,
@@ -375,7 +373,7 @@ def run_command(
     """Run a command and display it to the user."""
 
     # Format command for display
-    cmd_str = cmd if isinstance(cmd, str) else shlex.join(cmd)
+    cmd_str = shlex.join(cmd)
     click.echo(f"\n🔄 Running command: {cmd_str}")
     if cwd:
         click.echo(f"📂 In directory: {cwd}")
@@ -387,7 +385,7 @@ def run_command(
         env.update(env_vars)
 
     # Run the command
-    result = subprocess.run(
+    result = run_resolved(
         cmd,
         check=check,
         cwd=cwd,
@@ -419,7 +417,7 @@ def run_terraform(
 ) -> None:
     """Run terraform init followed by plan or apply in a directory."""
     tf_dir = Path(tf_dir)
-    terraform_path = get_terraform_path()
+    terraform_path = "terraform"
 
     init_args: list[str] = [terraform_path, "init"]
     if local_state:
@@ -450,9 +448,7 @@ def is_github_authenticated() -> bool:
     """
     try:
         # Try to get the current user, which will fail if not authenticated
-        result = run_command(
-            [get_gh_path(), "auth", "status"], check=False, capture_output=True
-        )
+        result = run_command(["gh", "auth", "status"], check=False, capture_output=True)
         return result.returncode == 0
     except Exception:
         return False
@@ -483,14 +479,14 @@ def handle_github_authentication(interactive: bool = True) -> None:
     try:
         if choice == "1":
             # Browser-based authentication
-            run_command([get_gh_path(), "auth", "login", "--web"])
+            run_command(["gh", "auth", "login", "--web"])
         else:
             # Token-based authentication
             token = click.prompt(
                 "Enter your GitHub Personal Access Token", hide_input=True
             )
             # Use a subprocess with pipe to avoid showing the token in process list
-            process = subprocess.Popen(
+            process = popen_resolved(
                 ["gh", "auth", "login", "--with-token"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -523,7 +519,7 @@ def create_github_repository(repository_owner: str, repository_name: str) -> Non
         # Check if repo exists
         result = run_command(
             [
-                get_gh_path(),
+                "gh",
                 "repo",
                 "view",
                 f"{repository_owner}/{repository_name}",
@@ -541,7 +537,7 @@ def create_github_repository(repository_owner: str, repository_name: str) -> Non
             )
             run_command(
                 [
-                    get_gh_path(),
+                    "gh",
                     "repo",
                     "create",
                     f"{repository_owner}/{repository_name}",
@@ -662,7 +658,7 @@ class E2EDeployment:
         try:
             result = run_command(
                 [
-                    get_gcloud_path(),
+                    "gcloud",
                     "storage",
                     "buckets",
                     "describe",
@@ -676,7 +672,7 @@ class E2EDeployment:
                 click.echo(f"\n📦 Creating Terraform state bucket: {bucket_name}")
                 run_command(
                     [
-                        get_gcloud_path(),
+                        "gcloud",
                         "storage",
                         "buckets",
                         "create",
@@ -688,7 +684,7 @@ class E2EDeployment:
 
                 run_command(
                     [
-                        get_gcloud_path(),
+                        "gcloud",
                         "storage",
                         "buckets",
                         "update",

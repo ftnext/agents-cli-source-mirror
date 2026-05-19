@@ -68,7 +68,7 @@ def cmd_data_ingestion(project, region, vector_search_location, collection_id, r
     if not datastore_type:
         raise click.ClickException(
             "No datastore type configured. "
-            "Set datastore under [tool.agents-cli.create_params] in pyproject.toml."
+            "Set datastore under create_params in agents-cli-manifest.yaml."
         )
 
     project_id = require_project_id(project)

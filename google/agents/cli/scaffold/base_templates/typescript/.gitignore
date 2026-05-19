@@ -190,6 +190,9 @@ testem.log
 Thumbs.db
 *.vscode*
 
+# ADK
+.adk/
+
 # Starter pack specific
 .env
 .persist_vector_store

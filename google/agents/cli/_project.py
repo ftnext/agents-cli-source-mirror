@@ -23,14 +23,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
+import yaml
 
 
 @dataclass
 class ProjectConfig:
-    """Configuration derived from pyproject.toml [tool.agents-cli]."""
+    """Configuration derived from agents-cli-manifest.yaml."""
 
     project_name: str = ""
-    version: str = "0.0.0"
     deployment_target: str = "none"
     agent_directory: str = "app"
     is_a2a: bool = False
@@ -39,52 +39,79 @@ class ProjectConfig:
     extra: dict = field(default_factory=dict)
 
 
-def read_project_config(project_dir: str | None = None) -> ProjectConfig:
-    """Read project metadata from pyproject.toml.
+_WARNED_LEGACY_CONFIG = False
 
-    Looks for [tool.agents-cli] section. Falls back to
-    sensible defaults if the file or section doesn't exist.
+
+def _warn_legacy_config() -> None:
+    """Warn about legacy configuration once."""
+    global _WARNED_LEGACY_CONFIG
+    if not _WARNED_LEGACY_CONFIG:
+        click.secho(
+            "\n⚠️  Legacy configuration detected in pyproject.toml.",
+            fg="yellow",
+            bold=True,
+        )
+        click.secho(
+            "   Run `agents-cli scaffold upgrade` to migrate to agents-cli-manifest.yaml.\n",
+            fg="yellow",
+        )
+        _WARNED_LEGACY_CONFIG = True
+
+
+def read_project_config(project_dir: str | None = None) -> ProjectConfig:
+    """Read project metadata from agents-cli-manifest.yaml.
+
+    Falls back to sensible defaults if the file doesn't exist.
 
     Args:
-        project_dir: Directory containing pyproject.toml.
+        project_dir: Directory containing agents-cli-manifest.yaml.
             Defaults to current working directory.
 
     Returns:
-        ProjectConfig with values from pyproject.toml or defaults.
+        ProjectConfig with values from the manifest or defaults.
     """
     root = Path(project_dir) if project_dir else Path.cwd()
-    pyproject = root / "pyproject.toml"
+    manifest_path = root / "agents-cli-manifest.yaml"
+    pyproject_path = root / "pyproject.toml"
 
-    if not pyproject.exists():
+    if manifest_path.exists():
+        # Primary: read from manifest
+        with open(manifest_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    elif pyproject_path.exists():
+        # Fallback: read from pyproject.toml
+        with open(pyproject_path, "rb") as f:
+            pyproj_data = tomllib.load(f)
+        if not pyproj_data.get("tool", {}).get("agents-cli"):
+            return ProjectConfig()
+        _warn_legacy_config()
+        data = pyproj_data["tool"]["agents-cli"]
+        # Read project name from [project]
+        project_section = pyproj_data.get("project", {})
+        project_name = project_section.get("name", "")
+        data["name"] = project_name
+    else:
+        # If neither works, return a default project config
         return ProjectConfig()
 
-    with open(pyproject, "rb") as f:
-        data = tomllib.load(f)
-
-    # Read project name and version from [project]
-    project_section = data.get("project", {})
-    project_name = project_section.get("name", "")
-    version = project_section.get("version", "0.0.0")
-
-    # Read ACLI config from [tool.agents-cli]
-    acli = data.get("tool", {}).get("agents-cli", {})
-    create_params = acli.get("create_params", {})
+    create_params = data.get("create_params", {})
+    project_name = data.get("name", "")
 
     return ProjectConfig(
         project_name=project_name,
-        version=version,
         deployment_target=create_params.get("deployment_target", "none"),
-        agent_directory=acli.get("agent_directory", "app"),
+        agent_directory=data.get("agent_directory", "app"),
         is_a2a=create_params.get("is_a2a", False),
         requires_data_ingestion=create_params.get("include_data_ingestion", False),
-        region=acli.get("region", "us-east1"),
+        region=data.get("region", "us-east1"),
         extra={
             k: v
-            for k, v in acli.items()
+            for k, v in data.items()
             if k
             not in {
                 "agent_directory",
                 "region",
+                "name",
             }
         },
     )
@@ -93,7 +120,7 @@ def read_project_config(project_dir: str | None = None) -> ProjectConfig:
 def check_cli_version(cfg: ProjectConfig) -> None:
     """Warn if the running CLI version doesn't match the version that scaffolded the project.
 
-    Compares ``acli_version`` from ``[tool.agents-cli]`` with the running
+    Compares ``acli_version`` from project config with the running
     ``__version__``.  Emits a warning with upgrade guidance when there is a
     mismatch; never blocks execution.
     """
@@ -126,21 +153,36 @@ def check_cli_version(cfg: ProjectConfig) -> None:
         )
 
 
+def _find_legacy_project_root(start_dir: Path) -> Path | None:
+    """Find a legacy project root containing a pyproject.toml with agents-cli config."""
+    for parent in [start_dir, *start_dir.parents]:
+        pyproject_path = parent / "pyproject.toml"
+        if pyproject_path.exists():
+            try:
+                with open(pyproject_path, "rb") as f:
+                    data = tomllib.load(f)
+                if "tool" in data and "agents-cli" in data["tool"]:
+                    return parent
+            except Exception:
+                pass
+    return None
+
+
 def find_project_root(dir: Path | None = None) -> Path | None:
-    """Find the project root by walking up looking for pyproject.toml with [tool.agents-cli]."""
+    """Find the project root by walking up looking for agents-cli-manifest.yaml."""
     if dir is None:
         dir = Path.cwd()
     for parent in [dir, *dir.parents]:
-        pyproj = parent / "pyproject.toml"
-        if pyproj.exists():
-            try:
-                with open(pyproj, "rb") as f:
-                    data = tomllib.load(f)
-                if "agents-cli" in data.get("tool", {}):
-                    return parent
-            except Exception:
-                # If it fails to parse or is corrupted, skip it
-                pass
+        manifest_path = parent / "agents-cli-manifest.yaml"
+        if manifest_path.exists():
+            return parent
+
+    # Fallback to legacy project root discovery
+    legacy_root = _find_legacy_project_root(dir)
+    if legacy_root is not None:
+        _warn_legacy_config()
+        return legacy_root
+
     return None
 
 
@@ -183,7 +225,7 @@ def chdir_project_root(dir: Path | None = None) -> None:
     root = find_project_root(dir)
     if not root:
         raise click.ClickException(
-            "No pyproject.toml found in the current directory or its parents.\n"
+            "No agents-cli-manifest.yaml found in the current directory or its parents.\n"
             "  Run this command from your project root, or create a project first:\n"
             "    agents-cli create my-agent"
         )
@@ -201,7 +243,7 @@ def require_agent_directory(cfg: ProjectConfig) -> None:
         raise click.ClickException(
             f"Agent directory '{cfg.agent_directory}' not found.\n"
             "  Ensure you're in the project root and that the directory exists.\n"
-            "  The agent_directory is configured in [tool.agents-cli] in pyproject.toml."
+            "  The agent_directory is configured in agents-cli-manifest.yaml."
         )
 
 
@@ -210,7 +252,7 @@ def require_deployment_target(cfg: ProjectConfig) -> None:
     if cfg.deployment_target in ("none", ""):
         raise click.ClickException(
             "No deployment target configured.\n"
-            "  Set deployment_target in [tool.agents-cli] in pyproject.toml,\n"
+            "  Set deployment_target in agents-cli-manifest.yaml,\n"
             "  or add deployment support to your project:\n"
             "    agents-cli scaffold enhance"
         )

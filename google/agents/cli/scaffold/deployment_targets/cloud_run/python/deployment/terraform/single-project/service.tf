@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
 
 # Generate a random password for the database user
 resource "random_password" "db_password" {
@@ -89,9 +89,7 @@ resource "google_cloud_run_v2_service" "app" {
   deletion_protection = false
   ingress             = "INGRESS_TRAFFIC_ALL"
   labels = {
-{%- if cookiecutter.is_adk %}
     "created-by"                  = "adk"
-{%- endif %}
 {%- if cookiecutter.agent_garden %}
     "deployed-with"               = "agent-garden"
 {%- if cookiecutter.agent_sample_id %}
@@ -138,7 +136,7 @@ resource "google_cloud_run_v2_service" "app" {
 {%- endif %}
 {%- endif %}
 
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
       # Mount the volume
       volume_mounts {
         name       = "cloudsql"
@@ -208,7 +206,7 @@ resource "google_cloud_run_v2_service" "app" {
 
     session_affinity = true
 
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
     # Cloud SQL volume
     volumes {
       name = "cloudsql"
@@ -235,7 +233,7 @@ resource "google_cloud_run_v2_service" "app" {
   # Make dependencies conditional to avoid errors.
   depends_on = [
     resource.google_project_service.services,
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
     google_sql_user.db_user,
     google_secret_manager_secret_version.db_password,
 {%- endif %}

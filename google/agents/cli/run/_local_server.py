@@ -20,12 +20,13 @@ import json
 import os
 import signal
 import socket
-import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
+
+from google.agents.cli._runner import popen_resolved
 
 _PID_DIR = ".google-agents-cli"
 _PID_FILENAME = "run_server.json"
@@ -40,6 +41,7 @@ def ensure_server(
     agent_dir: str,
     *,
     idle_timeout: int = _DEFAULT_IDLE_TIMEOUT,
+    trace_to_cloud: bool = False,
 ) -> int:
     """Return the port of a running local server, starting one if needed.
 
@@ -52,6 +54,8 @@ def ensure_server(
         agent_dir: The agent directory name (e.g. ``"investment_agent"``).
         idle_timeout: Seconds of inactivity before the server is considered
             stale and replaced.  Defaults to 30 minutes.
+        trace_to_cloud: When ``True``, export traces to Cloud Trace.
+            Only takes effect when a new server is started.
 
     Returns:
         The port number the server is listening on.
@@ -63,6 +67,15 @@ def ensure_server(
         if _is_idle(info, idle_timeout):
             _cleanup(project_root, info)
         else:
+            if trace_to_cloud and not info.get("trace_to_cloud"):
+                click.secho(
+                    "Warning: reusing existing server that was started "
+                    "without --trace-to-cloud.\n"
+                    "  Run 'agents-cli run --stop-server' first to "
+                    "restart with tracing enabled.",
+                    fg="yellow",
+                    err=True,
+                )
             _update_activity(project_root)
             return info["port"]
 
@@ -71,9 +84,9 @@ def ensure_server(
         _cleanup(project_root, info)
 
     port = _find_free_port()
-    pid = _start_server(project_root, agent_dir, port)
+    pid = _start_server(project_root, agent_dir, port, trace_to_cloud=trace_to_cloud)
     _wait_for_port(port, pid=pid)
-    _write_pid_file(project_root, pid=pid, port=port)
+    _write_pid_file(project_root, pid=pid, port=port, trace_to_cloud=trace_to_cloud)
     click.secho(f"Local server started on port {port} (PID {pid})", dim=True)
     click.secho("  Stop with: agents-cli run --stop-server", dim=True)
     return port
@@ -134,6 +147,8 @@ def _start_server(
     project_root: Path,
     agent_dir: str,
     port: int,
+    *,
+    trace_to_cloud: bool = False,
 ) -> int:
     """Start ``adk api_server`` as a detached background process.
 
@@ -153,8 +168,10 @@ def _start_server(
         "--port",
         str(port),
         "--reload_agents",
-        ".",
     ]
+    if trace_to_cloud:
+        cmd.append("--trace_to_cloud")
+    cmd.append(".")
 
     # Use in-memory sessions locally so the server can start without
     # cloud dependencies (e.g. Agent Runtime session type).
@@ -163,7 +180,7 @@ def _start_server(
 
     log_file = open(log_path, "a", encoding="utf-8")
     try:
-        proc = subprocess.Popen(
+        proc = popen_resolved(
             cmd,
             cwd=str(project_root),
             stdout=log_file,
@@ -229,13 +246,20 @@ def _read_pid_file(project_root: Path) -> dict | None:
         return None
 
 
-def _write_pid_file(project_root: Path, *, pid: int, port: int) -> None:
+def _write_pid_file(
+    project_root: Path,
+    *,
+    pid: int,
+    port: int,
+    trace_to_cloud: bool = False,
+) -> None:
     now = datetime.now(UTC).isoformat()
     data = {
         "pid": pid,
         "port": port,
         "started_at": now,
         "last_activity": now,
+        "trace_to_cloud": trace_to_cloud,
     }
     path = _pid_file_path(project_root)
     path.parent.mkdir(exist_ok=True)

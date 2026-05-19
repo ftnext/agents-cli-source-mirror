@@ -932,10 +932,9 @@ def create(
         # For Go/Java/TypeScript templates, try to get project ID from gcloud config even when skipping checks
         # This is needed because their .env requires a valid project ID for local development
         try:
-            result = subprocess.run(
-                ["gcloud", "config", "get-value", "project"],
+            result = run_gcloud_command(
+                ["config", "get-value", "project"],
                 capture_output=True,
-                text=True,
                 check=False,
             )
             project_id = result.stdout.strip()

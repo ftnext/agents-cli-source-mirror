@@ -185,6 +185,9 @@ testem.log
 Thumbs.db
 *.vscode*
 
+# ADK
+.adk/
+
 # Agent CLI specific
 .persist_vector_store
 tests/load_test/.results/*.html

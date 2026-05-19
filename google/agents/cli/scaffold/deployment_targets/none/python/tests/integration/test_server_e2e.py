@@ -254,16 +254,14 @@ from requests.exceptions import RequestException
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://127.0.0.1:8000/"
+BASE_URL = "http://127.0.0.1:8000"
 {%- if cookiecutter.is_a2a %}
-A2A_RPC_URL = BASE_URL + "a2a/{{cookiecutter.agent_directory}}/"
+A2A_RPC_URL = BASE_URL + "/a2a/{{cookiecutter.agent_directory}}/"
 AGENT_CARD_URL = A2A_RPC_URL + ".well-known/agent-card.json"
-{%- elif cookiecutter.is_adk %}
-STREAM_URL = BASE_URL + "run_sse"
 {%- else %}
-STREAM_URL = BASE_URL + "stream_messages"
+STREAM_URL = BASE_URL + "/run_sse"
 {%- endif %}
-FEEDBACK_URL = BASE_URL + "feedback"
+FEEDBACK_URL = BASE_URL + "/feedback"
 
 HEADERS = {"Content-Type": "application/json"}
 
@@ -430,7 +428,6 @@ def test_chat_stream(server_fixture: subprocess.Popen[str]) -> None:
 {%- else %}
     """Test the chat stream functionality."""
     logger.info("Starting chat stream test")
-{% if cookiecutter.is_adk %}
     # Create session first
     user_id = "test_user_123"
     session_data = {"state": {"preferred_language": "English", "visit_count": 1}}
@@ -457,24 +454,11 @@ def test_chat_stream(server_fixture: subprocess.Popen[str]) -> None:
         },
         "streaming": True,
     }
-{% else %}
-    data = {
-        "input": {
-            "messages": [
-                {"type": "human", "content": "Hello, AI!"},
-                {"type": "ai", "content": "Hello!"},
-                {"type": "human", "content": "Who are you?"},
-            ]
-        },
-        "config": {"metadata": {"user_id": "test-user", "session_id": "test-session"}},
-    }
-{% endif %}
     response = requests.post(
         STREAM_URL, headers=HEADERS, json=data, stream=True, timeout=60
     )
     assert response.status_code == 200
 
-{%- if cookiecutter.is_adk %}
     # Parse SSE events from response
     events = []
     for line in response.iter_lines():
@@ -500,30 +484,6 @@ def test_chat_stream(server_fixture: subprocess.Popen[str]) -> None:
             break
 
     assert has_text_content, "Expected at least one event with text content"
-{%- else %}
-    events = [json.loads(line) for line in response.iter_lines() if line]
-    assert events, "No events received from stream"
-
-    # Verify each event is a tuple of message and metadata
-    for event in events:
-        assert isinstance(event, list), "Event should be a list"
-        assert len(event) == 2, "Event should contain message and metadata"
-        message, _ = event
-
-        # Verify message structure
-        assert isinstance(message, dict), "Message should be a dictionary"
-        assert message["type"] == "constructor"
-        assert "kwargs" in message, "Constructor message should have kwargs"
-
-    # Verify at least one message has content
-    has_content = False
-    for event in events:
-        message = event[0]
-        if message.get("type") == "constructor" and "content" in message["kwargs"]:
-            has_content = True
-            break
-    assert has_content, "At least one message should have content"
-{%- endif %}
 {%- endif %}
 
 

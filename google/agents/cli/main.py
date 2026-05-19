@@ -12,38 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Root Click group for the 'agents-cli' CLI."""
+"""Root Click group for the 'agents-cli' CLI.
 
+Every command is registered lazily via `add_lazy_command`. The command
+modules are imported only when the user invokes the command (or asks for
+its specific --help). See `LazyGroup` in `_click.py`.
+"""
+
+import io
 import os
 import sys
 import traceback
 
 import click
-from rich.console import Console
 
+from google.agents.cli import _tools
 from google.agents.cli.__init__ import __version__
-from google.agents.cli._click import patch_source_in_help
+from google.agents.cli._click import LazyGroup, patch_source_in_help
 from google.agents.cli._project import is_project_moved
-from google.agents.cli._tools import require_tool
-from google.agents.cli.data.cmd_data_ingestion import cmd_data_ingestion
-from google.agents.cli.deploy.cmd_deploy import cmd_deploy
-from google.agents.cli.dev.cmd_install import cmd_install
-from google.agents.cli.dev.cmd_lint import cmd_lint
-from google.agents.cli.dev.cmd_playground import cmd_playground
-from google.agents.cli.eval.cmd_compare import cmd_compare
-from google.agents.cli.eval.cmd_eval import cmd_eval
-from google.agents.cli.info.cmd_info import cmd_info
-from google.agents.cli.infra.cmd_cicd import setup_cicd
-from google.agents.cli.infra.cmd_datastore import cmd_infra_datastore
-from google.agents.cli.infra.cmd_infra import infra_group
-from google.agents.cli.publish.cmd_publish import publish_group
-from google.agents.cli.run.cmd_run import cmd_run
-from google.agents.cli.scaffold.commands.create import create as cmd_create
-from google.agents.cli.scaffold.commands.enhance import enhance as cmd_enhance
-from google.agents.cli.scaffold.commands.upgrade import upgrade as cmd_upgrade
-from google.agents.cli.setup.cmd_auth import cmd_login
-from google.agents.cli.setup.cmd_setup import cmd_setup
-from google.agents.cli.setup.cmd_update import cmd_update
+
+# Force utf-8 encoding and non-exception fallback for printing
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if isinstance(sys.stderr, io.TextIOWrapper):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def _print_is_project_moved_tip() -> None:
@@ -53,11 +45,13 @@ def _print_is_project_moved_tip() -> None:
         " re-run your original command"
     )
     if is_project_moved():
+        from rich.console import Console
+
         Console().print(message, style="cyan")
 
 
-class _MainGroup(click.Group):
-    """Click group that prints full tracebacks on unhandled exceptions."""
+class _MainGroup(LazyGroup):
+    """Click group with lazy command loading and full-traceback exception handling."""
 
     def invoke(self, ctx: click.Context) -> None:
         try:
@@ -69,6 +63,8 @@ class _MainGroup(click.Group):
             _print_is_project_moved_tip()
             raise
         except KeyboardInterrupt:
+            from rich.console import Console
+
             Console().print(f"\nagents-cli v{__version__}", style="dim")
             Console().print("Operation cancelled by user", style="yellow")
             ctx.exit(130)
@@ -105,78 +101,104 @@ def main():
 
     display_update_message()
     check_skills_version()
-    require_tool("uv")
+    _tools.require_tool("uv")
 
 
 # Setup commands
-main.add_command(cmd_setup, "setup")
-main.add_command(cmd_update, "update")
+main.add_lazy_command(
+    "setup",
+    "google.agents.cli.setup.cmd_setup:cmd_setup",
+    "Install agents-cli and skills to detected coding agents.",
+)
+main.add_lazy_command(
+    "update",
+    "google.agents.cli.setup.cmd_update:cmd_update",
+    "Force reinstall agents skills to all detected coding agents.",
+)
 
 # Auth commands
-main.add_command(cmd_login, "login")
+main.add_lazy_command(
+    "login",
+    "google.agents.cli.setup.cmd_auth:cmd_login",
+    "Authenticate with Google Cloud or AI Studio.",
+)
 
-
-# Scaffold command group
-@click.group("scaffold")
-def scaffold_group():
-    """Scaffold, enhance, and upgrade agent projects.
-
-    \b
-    Subcommands:
-      create   Create a new agent project
-      enhance  Add deployment target or CI/CD to an existing project
-      upgrade  Upgrade project to a newer agents-cli version
-    """
-
-
-scaffold_group.add_command(cmd_create, "create")
-scaffold_group.add_command(cmd_enhance, "enhance")
-scaffold_group.add_command(cmd_upgrade, "upgrade")
-main.add_command(scaffold_group)
-
-# Top-level alias: agents-cli create → agents-cli scaffold create
-main.add_command(cmd_create, "create")
+# Scaffold command group + top-level `create` alias
+main.add_lazy_command(
+    "scaffold",
+    "google.agents.cli.scaffold.cmd_scaffold_group:scaffold_group",
+    "Scaffold, enhance, and upgrade agent projects.",
+)
+main.add_lazy_command(
+    "create",
+    "google.agents.cli.scaffold.commands.create:create",
+    "Create GCP-based AI agent projects from templates.",
+)
 
 # Dev commands
-main.add_command(cmd_playground, "playground")
-main.add_command(cmd_run, "run")
-main.add_command(cmd_lint, "lint")
-main.add_command(cmd_install, "install")
+main.add_lazy_command(
+    "playground",
+    "google.agents.cli.dev.cmd_playground:cmd_playground",
+    "Start the local agent playground.",
+)
+main.add_lazy_command(
+    "run",
+    "google.agents.cli.run.cmd_run:cmd_run",
+    "Run the agent with a single prompt (non-interactive).",
+)
+main.add_lazy_command(
+    "lint",
+    "google.agents.cli.dev.cmd_lint:cmd_lint",
+    "Run code quality checks.",
+)
+main.add_lazy_command(
+    "install",
+    "google.agents.cli.dev.cmd_install:cmd_install",
+    "Install project dependencies.",
+)
 
 # Data commands
-main.add_command(cmd_data_ingestion, "data-ingestion")
-
+main.add_lazy_command(
+    "data-ingestion",
+    "google.agents.cli.data.cmd_data_ingestion:cmd_data_ingestion",
+    "Run data ingestion for RAG agents.",
+)
 
 # Eval commands
-@click.group("eval")
-def eval_group():
-    """Evaluate agents and compare results.
+main.add_lazy_command(
+    "eval",
+    "google.agents.cli.eval.cmd_eval_group:eval_group",
+    "Evaluate agents and compare results.",
+)
 
-    \b
-    Subcommands:
-      run      Run agent evaluations
-      compare  Compare two eval result JSON files
-    """
-    pass
+# Deploy + publish commands
+main.add_lazy_command(
+    "deploy",
+    "google.agents.cli.deploy.cmd_deploy:cmd_deploy",
+    "Deploy the agent.",
+)
+main.add_lazy_command(
+    "publish",
+    "google.agents.cli.publish.cmd_publish_group:publish_group",
+    "Publish agents to various targets.",
+)
 
-
-eval_group.add_command(cmd_eval, "run")
-eval_group.add_command(cmd_compare, "compare")
-main.add_command(eval_group)
-
-# Deploy commands
-main.add_command(cmd_deploy, "deploy")
-main.add_command(publish_group)
-
-# Infra commands (infra single-project + infra cicd + infra datastore)
-main.add_command(infra_group)
-infra_group.add_command(setup_cicd, "cicd")
-infra_group.add_command(cmd_infra_datastore, "datastore")
+# Infra commands
+main.add_lazy_command(
+    "infra",
+    "google.agents.cli.infra.cmd_infra:infra_group",
+    "Provision infrastructure for your agent project.",
+)
 
 # Info command
-main.add_command(cmd_info, "info")
+main.add_lazy_command(
+    "info",
+    "google.agents.cli.info.cmd_info:cmd_info",
+    "Show project configuration, paths, and CLI version.",
+)
 
-# Patch all commands to show source file in --help
+# Patch the root group itself to show source file in --help.
+# Lazy commands get patched on first access by LazyGroup.get_command.
 patch_source_in_help(main)
 
 

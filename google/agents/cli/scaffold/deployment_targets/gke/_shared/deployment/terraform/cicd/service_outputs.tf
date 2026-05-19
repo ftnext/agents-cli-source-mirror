@@ -22,7 +22,7 @@ output "gke_cluster_endpoints" {
   value       = { for k, v in google_container_cluster.app : k => v.endpoint }
 }
 
-{%- if cookiecutter.is_adk and cookiecutter.session_type == "cloud_sql" %}
+{%- if cookiecutter.session_type == "cloud_sql" %}
 
 output "instance_connection_names" {
   value = { for k, v in google_sql_database_instance.session_db : k => v.connection_name }

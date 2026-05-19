@@ -26,7 +26,7 @@ resource "google_vertex_ai_reasoning_engine" "app" {
   project      = var.project_id
 
   spec {
-{%- if cookiecutter.is_adk and not cookiecutter.is_a2a %}
+{%- if not cookiecutter.is_a2a %}
     agent_framework = "google-adk"
 {%- else %}
     agent_framework = "custom"

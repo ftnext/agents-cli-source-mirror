@@ -21,9 +21,8 @@ from pathlib import Path
 
 import click
 
-from google.agents.cli._runner import run
+from google.agents.cli._runner import popen_resolved, run
 from google.agents.cli._skills_check import SKILLS_NPX_PACKAGE
-from google.agents.cli._tools import get_npx_path
 
 _MOTTOS = [
     "Give your coding agent the power to build ADK projects.",
@@ -93,7 +92,7 @@ def _run_npx_skills(args, spinner_msg):
     click.secho(f"  \u25b8 {shlex.join(args)}", fg="cyan", dim=True)
 
     summary_lines = []
-    proc = subprocess.Popen(
+    proc = popen_resolved(
         args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -249,6 +248,7 @@ def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source)
     Use --dev to install agents-cli as editable from the local repo (for contributors).
     Use --interactive / -i to enable interactive authentication if not already logged in.
     """
+    click.echo("Setting up...")
     click.echo()
     _print_logo()
 
@@ -266,7 +266,7 @@ def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source)
             source = str(source_path.resolve())
         else:
             source = skills_source
-    args = [get_npx_path(), "-y", SKILLS_NPX_PACKAGE, "add", source, "-y", "--all"]
+    args = ["npx", "-y", SKILLS_NPX_PACKAGE, "add", source, "-y", "--all"]
     if not workspace:
         args.append("-g")
 

@@ -35,7 +35,8 @@ from google.iam.v1 import iam_policy_pb2, policy_pb2
 from vertexai._genai import _agent_engines_utils
 from vertexai._genai.types import AgentEngine, AgentEngineConfig, IdentityType
 
-from google.agents.cli._project import ProjectConfig
+from google.agents.cli._project import ProjectConfig, find_project_root
+from google.agents.cli._runner import run_resolved
 from google.agents.cli.deploy._operation import (
     METADATA_FILE,
     clear_operation,
@@ -43,6 +44,7 @@ from google.agents.cli.deploy._operation import (
     write_operation,
 )
 from google.agents.cli.deploy._utils import parse_key_value_pairs
+from google.agents.cli.scaffold.utils.language import get_project_version
 
 # Suppress google-cloud-storage version compatibility warning
 warnings.filterwarnings(
@@ -94,7 +96,7 @@ def _introspect_agent_via_subprocess(
         f.write(_INTROSPECT_SCRIPT)
         script_path = f.name
     try:
-        result = subprocess.run(
+        result = run_resolved(
             ["uv", "run", "python", script_path, entrypoint_module, entrypoint_object],
             capture_output=True,
             text=True,
@@ -254,14 +256,14 @@ def _generate_requirements_file(requirements_path: str) -> None:
     ]
 
     # Try with --no-annotate first (newer uv)
-    result = subprocess.run(
+    result = run_resolved(
         [*base_cmd, "--no-annotate"],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         # Fall back without --no-annotate (older uv)
-        result = subprocess.run(
+        result = run_resolved(
             base_cmd,
             capture_output=True,
             text=True,
@@ -304,6 +306,7 @@ def deploy_agent_runtime(
     num_workers: int = 1,
     agent_identity: bool = False,
     no_wait: bool = False,
+    psc_interface_config: dict | None = None,
 ) -> AgentEngine | None:
     """Deploy the agent to Vertex AI Agent Runtime.
 
@@ -329,6 +332,9 @@ def deploy_agent_runtime(
         num_workers: Number of worker processes.
         agent_identity: Enable agent identity.
         no_wait: If True, start the deployment and return immediately.
+        psc_interface_config: PSC interface configuration dict for private
+            VPC connectivity. Contains ``network_attachment`` and optionally
+            ``dns_peering_configs``.
 
     Returns:
         The deployed AgentEngine instance, or None when no_wait is True.
@@ -355,8 +361,8 @@ def deploy_agent_runtime(
     # Merge secrets into env_vars
     env_vars.update(secrets)  # type: ignore[arg-type]
 
-    # Set deployment-specific environment variables
-    env_vars["AGENT_VERSION"] = cfg.version
+    project_root = find_project_root() or "."
+    env_vars["AGENT_VERSION"] = get_project_version(project_root)
     env_vars["GOOGLE_CLOUD_REGION"] = location
     env_vars["NUM_WORKERS"] = str(num_workers)
 
@@ -388,6 +394,17 @@ def deploy_agent_runtime(
         params.append(("Service Account", service_account))
     if agent_identity:
         params.append(("Agent Identity", "Enabled (Preview)"))
+    if psc_interface_config:
+        params.append(
+            ("Network Attachment", psc_interface_config.get("network_attachment", "—"))
+        )
+        for i, dc in enumerate(psc_interface_config.get("dns_peering_configs", [])):
+            params.append(
+                (
+                    f"DNS Peering [{i}]",
+                    f"{dc.get('domain', '')} → {dc.get('target_project', '')}/{dc.get('target_network', '')}",
+                )
+            )
     for name, value in params:
         click.echo(f"  {name}: {value}")
     if env_vars:
@@ -434,6 +451,9 @@ def deploy_agent_runtime(
     # The Console uses agent_framework to decide which playground to render.
     # Set explicitly — the unset default does not map to "custom".
     config_kwargs["agent_framework"] = "custom" if cfg.is_a2a else "google-adk"
+
+    if psc_interface_config is not None:
+        config_kwargs["psc_interface_config"] = psc_interface_config
 
     config = AgentEngineConfig(**config_kwargs)
 
@@ -563,6 +583,7 @@ def _start_deploy_operation(
         container_concurrency=config.container_concurrency,
         identity_type=config.identity_type,
         agent_framework=config.agent_framework,
+        psc_interface_config=config.psc_interface_config,
     )
 
     if matching_agents:

@@ -38,7 +38,13 @@ _console = Console()
     default=True,
     help="Enable / disable live reload when agent code changes.",
 )
-def cmd_playground(port, host, reload_agents):
+@click.option(
+    "--trace-to-cloud",
+    is_flag=True,
+    default=False,
+    help="Export traces to Google Cloud Trace.",
+)
+def cmd_playground(port, host, reload_agents, trace_to_cloud):
     """Start the local agent playground."""
     chdir_project_root()
     cfg = read_project_config()
@@ -64,6 +70,8 @@ def cmd_playground(port, host, reload_agents):
     ]
     if reload_agents:
         args.append("--reload_agents")
+    if trace_to_cloud:
+        args.append("--trace_to_cloud")
 
     _print_banner(url, args)
     run(args, print_cmd=False, check_err_msg="Failed to start playground")

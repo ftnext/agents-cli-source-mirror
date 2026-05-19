@@ -50,6 +50,12 @@ Before you begin, ensure you have:
 
 ## Quick Start
 
+Install `agents-cli` and its skills if not already installed:
+
+```bash
+uvx google-agents-cli setup
+```
+
 Install required packages:
 
 ```bash
@@ -62,10 +68,7 @@ Test the agent with a local web server:
 agents-cli playground
 ```
 
-{%- if cookiecutter.is_adk %}
-
 You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`.
-{%- endif %}
 
 ## Commands
 
@@ -84,9 +87,7 @@ You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`
 | `agents-cli deploy`  | Deploy agent to {{ 'GKE' if cookiecutter.deployment_target == 'gke' else 'Cloud Run' }}                                                                   |
 {%- elif cookiecutter.deployment_target == 'agent_runtime' %}
 | `agents-cli deploy`  | Deploy agent to Agent Runtime                                                                |
-{%- if cookiecutter.is_adk or cookiecutter.is_a2a %}
 | `agents-cli publish gemini-enterprise` | Register deployed agent to Gemini Enterprise                    |
-{%- endif -%}
 {%- endif -%}
 {%- if cookiecutter.is_a2a %}
 | [A2A Inspector](https://github.com/a2aproject/a2a-inspector) | Launch A2A Protocol Inspector                                                        |

@@ -28,14 +28,14 @@ from packaging import version as pkg_version
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
 
-from google.agents.cli._project import find_project_root
+from google.agents.cli._project import find_project_root, read_project_config
+from google.agents.cli._runner import run_resolved
+from google.agents.cli._tools import ToolNotFoundError, require_tool
 
 from ..utils.backup import create_project_backup
 from ..utils.generation_metadata import metadata_to_cli_args
 from ..utils.language import (
-    detect_language,
     find_agent_file,
-    get_acli_config_for_language,
     get_agent_file_hint,
     get_language_config,
     validate_agent_file,
@@ -91,22 +91,31 @@ _EXCLUDED_DIRS = {
 }
 
 
+def _has_legacy_config(project_dir: pathlib.Path) -> bool:
+    """Check if project has legacy config (pyproject.toml)."""
+    pyproj = project_dir / "pyproject.toml"
+    if pyproj.exists():
+        try:
+            with open(pyproj, "rb") as f:
+                pyproj_data = tomllib.load(f)
+            if "tool" in pyproj_data and "agents-cli" in pyproj_data["tool"]:
+                return True
+        except Exception:
+            logging.debug("Failed to read pyproject.toml", exc_info=True)
+            pass
+    return False
+
+
 def get_project_acli_config(project_dir: pathlib.Path) -> dict[str, Any] | None:
     """Read agents-cli config from project config files.
 
-    Uses shared language utilities for config detection.
-
-    For Python projects: config in pyproject.toml under [tool.agents-cli]
-    For Go projects: config in .acli.toml under [project]
-    For Java projects: config in pom.xml as acli.* Maven properties
+    Uses read_project_config for unified parsing.
 
     Args:
         project_dir: Path to the project directory
 
     Returns:
         Normalized config dict if found, None otherwise.
-        The returned dict has a consistent structure with keys:
-        - base_template, acli_version, agent_directory, create_params, language
     """
     # Handle the case where we're in a subdirectory under the project root.
     project_root_dir = find_project_root(project_dir)
@@ -114,56 +123,34 @@ def get_project_acli_config(project_dir: pathlib.Path) -> dict[str, Any] | None:
         project_dir = project_root_dir
         console.print(f"[dim]Resolved project root to: {project_dir}[/dim]")
 
-    # Detect language first
-    language = detect_language(project_dir)
+    # read_project_config handles both manifest yaml and legacy pyproject.toml config
+    cfg = read_project_config(str(project_dir))
 
-    # Get config using shared utility
-    config = get_acli_config_for_language(project_dir, language)
-    if not config:
+    # Return None if no agents-cli-manifest.yaml or legacy config is present
+    manifest_path = project_dir / "agents-cli-manifest.yaml"
+    if not manifest_path.exists() and not _has_legacy_config(project_dir):
         return None
 
-    # For Go projects, normalize the config structure
-    if language == "go":
-        return {
-            "base_template": config.get("base_template"),
-            "acli_version": config.get("version"),
-            "agent_directory": config.get("agent_directory", "agent"),
-            "language": config.get("language", "go"),
-            "create_params": {
-                "deployment_target": config.get("deployment_target"),
-                "cicd_runner": config.get("cicd_runner"),
-            },
-        }
+    create_params = cfg.extra.get("create_params", {})
 
-    # For Java projects, normalize the config structure (same as Go)
-    if language == "java":
-        return {
-            "base_template": config.get("base_template"),
-            "acli_version": config.get("version"),
-            "agent_directory": config.get("agent_directory", "src/main/java"),
-            "language": config.get("language", "java"),
-            "create_params": {
-                "deployment_target": config.get("deployment_target"),
-                "cicd_runner": config.get("cicd_runner"),
-            },
-        }
-
-    # For TypeScript projects, normalize the config structure (same as Go)
-    if language == "typescript":
-        return {
-            "base_template": config.get("base_template"),
-            "acli_version": config.get("version"),
-            "agent_directory": config.get("agent_directory", "app"),
-            "language": config.get("language", "typescript"),
-            "create_params": {
-                "deployment_target": config.get("deployment_target"),
-                "cicd_runner": config.get("cicd_runner"),
-            },
-        }
-
-    # For Python, add language key and return as-is
-    config["language"] = language
-    return config
+    return {
+        "name": cfg.project_name,
+        "base_template": cfg.extra.get("base_template", "adk"),
+        "acli_version": cfg.extra.get("acli_version"),
+        "agent_directory": cfg.agent_directory,
+        "language": cfg.extra.get("language", "python"),
+        "create_params": {
+            "deployment_target": cfg.deployment_target,
+            "session_type": create_params.get("session_type", "none"),
+            "cicd_runner": create_params.get("cicd_runner", "skip"),
+            "include_data_ingestion": cfg.requires_data_ingestion,
+            "is_a2a": cfg.is_a2a,
+            "datastore": create_params.get("datastore", "none"),
+            "agent_guidance_filename": create_params.get(
+                "agent_guidance_filename", "GEMINI.md"
+            ),
+        },
+    }
 
 
 def _should_skip_config_value(value: Any) -> bool:
@@ -179,7 +166,7 @@ def build_args_from_config(
     """Build CLI arguments from project config.
 
     Args:
-        project_config: The [tool.agents-cli] config dict
+        project_config: The config dict from the manifest
         auto_approve: If True, add --auto-approve to args
         cli_overrides: Additional CLI args to merge (e.g., from original command)
 
@@ -188,7 +175,7 @@ def build_args_from_config(
     """
     # --skip-deps is added because dependencies were already installed on first run
     # --skip-welcome avoids showing the banner twice
-    args = ["enhance", "--skip-deps", "--skip-welcome"]
+    args = ["scaffold", "enhance", "--skip-deps", "--skip-welcome"]
 
     # Pass through auto-approve if it was set on the original command
     if auto_approve:
@@ -240,7 +227,7 @@ def get_display_params_from_config(project_config: dict[str, Any]) -> dict[str, 
     """Extract display-worthy parameters from project config.
 
     Args:
-        project_config: The [tool.agents-cli] config dict
+        project_config: The config dict from the manifest
 
     Returns:
         Dict of parameter names to values for display
@@ -308,8 +295,8 @@ def _should_use_different_version(
 def _ensure_uvx_available(project_version: str) -> None:
     """Ensure uvx is installed, exit with instructions if not."""
     try:
-        subprocess.run(["uvx", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
+        require_tool("uvx")
+    except ToolNotFoundError:
         console.print(
             f"❌ Project requires agents-cli version {project_version}, "
             "but 'uvx' is not installed",
@@ -352,7 +339,7 @@ def _execute_with_saved_config(
     env[_ENV_USING_SAVED_CONFIG] = "1"
 
     try:
-        subprocess.run(cmd, check=True, env=env)
+        run_resolved(cmd, check=True, env=env)
         return True
     except subprocess.CalledProcessError as e:
         if use_different_version:
@@ -571,25 +558,15 @@ def display_agent_directory_selection(
     current_dir: pathlib.Path, detected_directory: str, base_template: str | None = None
 ) -> str:
     """Display available directories and prompt for agent directory selection."""
-    # Determine the required object name based on base template
-    is_adk = base_template and "adk" in base_template.lower()
-    required_object = "root_agent" if is_adk else "agent"
-
     while True:
         console.print()
         console.print("📁 [bold]Agent Directory Selection[/bold]")
         console.print()
         console.print("Your project needs an agent directory containing:")
-        if is_adk:
-            console.print(
-                "  • [cyan]agent.py[/cyan] with [cyan]root_agent[/cyan] variable, or"
-            )
-            console.print("  • [cyan]root_agent.yaml[/cyan] (YAML config agent)")
-        else:
-            console.print("  • [cyan]agent.py[/cyan] file with your agent logic")
-            console.print(
-                f"  • [cyan]{required_object}[/cyan] variable defined in agent.py"
-            )
+        console.print(
+            "  • [cyan]agent.py[/cyan] with [cyan]root_agent[/cyan] variable, or"
+        )
+        console.print("  • [cyan]root_agent.yaml[/cyan] (YAML config agent)")
         console.print()
         console.print("Choose where your agent code is located:")
 
@@ -748,6 +725,25 @@ def _build_enhance_create_args(
     return args
 
 
+def _stale_manifest_keys_for_target(
+    cli_overrides: dict[str, Any],
+    project_config: dict[str, Any],
+) -> list[str]:
+    """Return manifest keys that should be removed for the resolved target.
+
+    agent_runtime handles sessions through Agent Platform internally, so any
+    stored session_type is meaningless there. cloud_run and gke both consume
+    session_type in their templates, so the value must carry through for them.
+    """
+    effective_deployment = cli_overrides.get(
+        "deployment_target",
+        project_config.get("create_params", {}).get("deployment_target"),
+    )
+    if effective_deployment == "agent_runtime":
+        return ["session_type"]
+    return []
+
+
 def _backfill_create_params_from_config(
     current_dir: pathlib.Path,
     cli_params: dict[str, Any],
@@ -822,7 +818,7 @@ def _run_smart_merge(
     # Build args for the "new" template (with enhance overrides merged)
     new_args = _build_enhance_create_args(project_config, cli_overrides)
 
-    same_config = old_args == new_args
+    same_config = sorted(old_args) == sorted(new_args)
 
     # Create temp directories
     temp_base = pathlib.Path(tempfile.mkdtemp(prefix="acli_enhance_"))
@@ -832,7 +828,6 @@ def _run_smart_merge(
     try:
         console.print()
         console.print("[dim]Generating templates for comparison...[/dim]")
-
         if same_config:
             # Only generate one template, use as both old and new
             console.print("[dim]  - Template...[/dim]")
@@ -958,15 +953,7 @@ def _run_smart_merge(
                 for k, v in cli_overrides.items()
                 if isinstance(v, str) and not _should_skip_config_value(v)
             }
-
-            # Determine stale keys to remove
-            stale_keys: list[str] = []
-            effective_deployment = cli_overrides.get(
-                "deployment_target",
-                project_config.get("create_params", {}).get("deployment_target"),
-            )
-            if effective_deployment and effective_deployment != "cloud_run":
-                stale_keys.append("session_type")
+            stale_keys = _stale_manifest_keys_for_target(cli_overrides, project_config)
 
             if metadata_updates or stale_keys:
                 update_acli_metadata(
@@ -1084,6 +1071,7 @@ def enhance(
     Run from inside your project directory (pass . as the path) or point to it
     explicitly. Use --dry-run to preview changes before applying them.
     """
+
     # Display welcome banner for enhance command (unless skipped by nested command)
     if not skip_welcome:
         display_welcome_banner(enhance_mode=True, quiet=auto_approve)
@@ -1191,7 +1179,7 @@ def enhance(
         elif dry_run:
             console.print(
                 "[bold red]Error:[/bold red] --dry-run requires saved project metadata "
-                "(pyproject.toml with [tool.agents-cli] section)."
+                "(agents-cli-manifest.yaml file)."
             )
             return
         elif has_cli_overrides:
@@ -1508,7 +1496,6 @@ def enhance(
                 language = "typescript"
 
             lang_config = get_language_config(language)
-            is_adk = base_template and "adk" in base_template.lower()
             required_var = lang_config.get("agent_variable", "root_agent")
 
             # Find agent file using shared utility
@@ -1522,10 +1509,9 @@ def enhance(
                 console.print(
                     "   An agent.py shim will be generated automatically for deployment compatibility."
                 )
-                if is_adk:
-                    console.print(
-                        "   📖 Learn more: [cyan][link=https://google.github.io/adk-docs/agents/agent-config/]ADK Agent Config guide[/link][/cyan]"
-                    )
+                console.print(
+                    "   📖 Learn more: [cyan][link=https://google.github.io/adk-docs/agents/agent-config/]ADK Agent Config guide[/link][/cyan]"
+                )
             elif agent_file:
                 # Agent file found
                 console.print(
@@ -1546,11 +1532,9 @@ def enhance(
                     console.print(
                         f"   Example: [cyan]{required_var} = YourAgentClass()[/cyan]"
                     )
-                    # Show ADK docs link for ADK templates
-                    if is_adk:
-                        console.print(
-                            "   📖 Learn more: [cyan][link=https://google.github.io/adk-docs/get-started/quickstart/#agentpy]ADK agent.py guide[/link][/cyan]"
-                        )
+                    console.print(
+                        "   📖 Learn more: [cyan][link=https://google.github.io/adk-docs/get-started/quickstart/#agentpy]ADK agent.py guide[/link][/cyan]"
+                    )
                     console.print()
                     if interactive:
                         if not click.confirm(

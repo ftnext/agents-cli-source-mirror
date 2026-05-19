@@ -1,10 +1,11 @@
 Metadata-Version: 2.4
 Name: google-agents-cli
-Version: 0.1.3
+Version: 0.2.0
 Summary: Agents CLI — Agent Development Lifecycle toolchain for ADK
 Author-email: Google LLC <agents-cli-dev-pypi@google.com>
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
+License-Expression: Apache-2.0
 Classifier: Programming Language :: Python :: 3
 Classifier: Operating System :: OS Independent
 License-File: LICENSE
@@ -175,6 +176,9 @@ Yes. `agents-cli scaffold enhance` adds deployment and CI/CD to existing project
 
 **Can I use `agents-cli` without a coding agent?**<br>
 Yes. The CLI works standalone — you can run `agents-cli scaffold`, `eval`, `deploy`, and every other command directly from your terminal. The skills just make it easier for coding agents to do it for you.
+
+**How can I extend `agents-cli` with other skills?**<br>
+`agents-cli` skills cover the agent-building lifecycle (scaffold, ADK code patterns, evals, deploy, publish, observability). For adjacent concerns, you could install another skill suite alongside. For example, [agent-skills](https://github.com/addyosmani/agent-skills) covers general software-engineering workflows (ideation, spec gates, planning, code review), and [google/skills](https://github.com/google/skills) covers Google Cloud foundations (BigQuery, Cloud Run, Firebase, GKE).
 
 ## Feedback
 

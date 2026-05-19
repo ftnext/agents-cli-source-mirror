@@ -18,13 +18,12 @@
 import logging
 import pathlib
 import shutil
-import subprocess
 import tempfile
 
 import click
 from jinja2 import StrictUndefined, Template
 
-from google.agents.cli._project import get_npm_path
+from google.agents.cli._runner import run_resolved
 
 from .lock_utils import _scaffold_root, get_agent_configs, get_lock_filename
 
@@ -76,7 +75,6 @@ def generate_pyproject(
             "deployment_target": deployment_target,
             "extra_dependencies": list(config.get("extra_dependencies", [])),
             "tags": tags,
-            "is_adk": "adk" in tags,
             "is_adk_live": "adk_live" in tags,
             "is_a2a": "a2a" in tags,
             "agent_directory": config.get("agent_directory", "app"),
@@ -112,11 +110,19 @@ def generate_lock_file(pyproject_content: str, output_path: pathlib.Path) -> Non
 
         # Run uv pip compile to generate lock file
         # Explicitly use PyPI to ensure consistent lock files
-        subprocess.run(
+        run_resolved(
             ["uv", "lock", "--no-config", "--default-index", "https://pypi.org/simple"],
             cwd=tmp_dir,
             check=True,
         )
+
+        # Also use audit to check / update vulnerabilities
+        run_resolved(
+            ["uv", "audit", "-U"],
+            cwd=tmp_dir,
+            check=True,
+        )
+
         # Replace locked-template with {{cookiecutter.project_name}} in generated lock file
         lock_file_path = tmp_dir / "uv.lock"
         with open(lock_file_path, "r+", encoding="utf-8") as f:
@@ -152,7 +158,7 @@ def generate_go_lock_file() -> None:
         project_name = "go-lock-gen"
 
         # Generate a Go project using the CLI
-        subprocess.run(
+        run_resolved(
             [
                 "uv",
                 "run",
@@ -177,7 +183,7 @@ def generate_go_lock_file() -> None:
         project_dir = tmp_dir / project_name
 
         # Run go mod tidy in the generated project
-        subprocess.run(
+        run_resolved(
             ["go", "mod", "tidy"],
             cwd=project_dir,
             check=True,
@@ -223,7 +229,7 @@ def generate_typescript_lock_file() -> None:
         project_name = "ts-lock-gen"
 
         # Generate a TypeScript project using the CLI
-        subprocess.run(
+        run_resolved(
             [
                 "uv",
                 "run",
@@ -248,8 +254,8 @@ def generate_typescript_lock_file() -> None:
         project_dir = tmp_dir / project_name
 
         # Run npm install to generate lock file
-        subprocess.run(
-            [get_npm_path(), "install", "--package-lock-only"],
+        run_resolved(
+            ["npm", "install", "--package-lock-only"],
             cwd=project_dir,
             check=True,
         )

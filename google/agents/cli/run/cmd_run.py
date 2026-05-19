@@ -73,6 +73,8 @@ def _resolve_dispatch_target(
     mode: str | None,
     app_name: str | None,
     custom_headers: tuple[str, ...],
+    *,
+    trace_to_cloud: bool = False,
 ) -> _DispatchTarget:
     """Resolve where and how to dispatch a query.
 
@@ -105,7 +107,7 @@ def _resolve_dispatch_target(
     chdir_project_root()
     cfg = read_project_config()
     require_agent_directory(cfg)
-    port = ensure_server(Path.cwd(), cfg.agent_directory)
+    port = ensure_server(Path.cwd(), cfg.agent_directory, trace_to_cloud=trace_to_cloud)
     return _DispatchTarget(
         service_url=f"http://localhost:{port}",
         headers={},
@@ -235,6 +237,15 @@ def _build_remote_headers(
     help="Stop the local background server and exit.",
 )
 @click.option(
+    "--trace-to-cloud",
+    is_flag=True,
+    default=False,
+    help=(
+        "Export traces to Google Cloud Trace. "
+        "Takes effect when the local server starts; ignored with --url."
+    ),
+)
+@click.option(
     "--verbose",
     "-v",
     is_flag=True,
@@ -251,6 +262,7 @@ def cmd_run(
     session_id: str | None,
     custom_headers: tuple[str, ...],
     start_server: bool,
+    trace_to_cloud: bool,
     verbose: bool,
 ):
     """Run the agent with a single prompt (non-interactive).
@@ -289,12 +301,19 @@ def cmd_run(
             fg="yellow",
             err=True,
         )
+    if url and trace_to_cloud:
+        click.secho(
+            "Warning: --trace-to-cloud has no effect when using --url.",
+            fg="yellow",
+            err=True,
+        )
 
     target = _resolve_dispatch_target(
         url=url,
         mode=mode,
         app_name=app_name,
         custom_headers=custom_headers,
+        trace_to_cloud=trace_to_cloud,
     )
     if url:
         click.echo(f"Querying remote agent: {url} (mode: {target.mode})")
@@ -529,7 +548,7 @@ def _query_adk_sse(
                 f"Failed to run agent (HTTP {resp.status_code}):\n  {resp.text}"
             )
         for line in resp.iter_lines(decode_unicode=True):
-            if not line or not line.startswith("data: "):
+            if not isinstance(line, str) or not line.startswith("data: "):
                 continue
             data_str = line[len("data: ") :]
             try:

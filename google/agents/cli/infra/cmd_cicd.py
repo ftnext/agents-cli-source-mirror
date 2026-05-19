@@ -18,19 +18,16 @@ import subprocess
 import sys
 import tempfile
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import backoff
 import click
 from rich.console import Console
 
-from google.agents.cli._project import chdir_project_root
+from google.agents.cli._project import chdir_project_root, read_project_config
 from google.agents.cli._tools import (
     ToolNotFoundError,
-    get_gcloud_path,
-    get_gh_path,
-    get_git_path,
+    require_tool,
 )
 from google.agents.cli.infra._cicd_utils import (
     ProjectConfig,
@@ -67,7 +64,7 @@ def check_gh_cli_installed() -> bool:
         bool: True if GitHub CLI is installed, False otherwise
     """
     try:
-        get_gh_path()
+        require_tool("gh")
         return True
     except ToolNotFoundError:
         return False
@@ -84,9 +81,7 @@ def check_github_scopes(cicd_runner: str) -> None:
     """
     try:
         # Get scopes from gh auth status
-        result = run_command(
-            [get_gh_path(), "auth", "status"], capture_output=True, check=True
-        )
+        result = run_command(["gh", "auth", "status"], capture_output=True, check=True)
 
         # Parse scopes from the output
         scopes = []
@@ -157,7 +152,7 @@ def setup_git_repository(config: ProjectConfig) -> str:
 
     # Initialize git if not already initialized
     if not (Path.cwd() / ".git").exists():
-        run_command([get_git_path(), "init", "-b", "main"])
+        run_command(["git", "init", "-b", "main"])
         console.print("✅ Git repository initialized")
 
     # Add remote if it doesn't exist
@@ -166,7 +161,7 @@ def setup_git_repository(config: ProjectConfig) -> str:
     )
     try:
         run_command(
-            [get_git_path(), "remote", "get-url", "origin"],
+            ["git", "remote", "get-url", "origin"],
             capture_output=True,
             check=True,
         )
@@ -174,7 +169,7 @@ def setup_git_repository(config: ProjectConfig) -> str:
     except subprocess.CalledProcessError:
         try:
             run_command(
-                [get_git_path(), "remote", "add", "origin", remote_url],
+                ["git", "remote", "add", "origin", remote_url],
                 capture_output=True,
                 check=True,
             )
@@ -206,54 +201,17 @@ def prompt_for_git_provider() -> str:
 
 
 def get_project_name_from_config() -> str | None:
-    """Get project name from pyproject.toml, .acli.toml, or pom.xml.
+    """Get project name from agents-cli-manifest.yaml.
 
     Returns:
         Project name if found, None otherwise.
     """
-    # Try .acli.toml first (Go projects)
-    if Path(".acli.toml").exists():
-        try:
-            with open(".acli.toml", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip().startswith("name ="):
-                        return line.split("=")[1].strip().strip("\"'")
-        except Exception:
-            pass
-
-    # Try pyproject.toml (Python projects)
-    if Path("pyproject.toml").exists():
-        try:
-            with open("pyproject.toml", encoding="utf-8") as f:
-                for line in f:
-                    if line.strip().startswith("name ="):
-                        return line.split("=")[1].strip().strip("\"'")
-        except Exception:
-            pass
-
-    # Try pom.xml (Java projects)
-    if Path("pom.xml").exists():
-        try:
-            tree = ET.parse("pom.xml")
-            root = tree.getroot()
-
-            # Handle Maven namespace
-            ns = ""
-            if root.tag.startswith("{"):
-                ns = root.tag.split("}")[0] + "}"
-
-            # Try <name> element first
-            name_elem = root.find(f"{ns}name")
-            if name_elem is not None and name_elem.text:
-                return name_elem.text.strip()
-
-            # Fallback to <artifactId>
-            artifact_id = root.find(f"{ns}artifactId")
-            if artifact_id is not None and artifact_id.text:
-                return artifact_id.text.strip()
-        except Exception:
-            pass
-
+    try:
+        cfg = read_project_config(".")
+        if cfg.project_name:
+            return cfg.project_name
+    except Exception:
+        pass
     return None
 
 
@@ -317,9 +275,7 @@ def prompt_for_repository_details(
 ) -> tuple[str, str, bool]:
     """Interactive prompt for repository details."""
     # Get current GitHub username as default owner
-    result = run_command(
-        [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
-    )
+    result = run_command(["gh", "api", "user", "--jq", ".login"], capture_output=True)
     default_owner = result.stdout.strip()
 
     # Get repository name if missing
@@ -359,7 +315,7 @@ def setup_terraform_backend(
     # Ensure bucket exists
     try:
         result = run_command(
-            [get_gcloud_path(), "storage", "buckets", "describe", f"gs://{bucket_name}"],
+            ["gcloud", "storage", "buckets", "describe", f"gs://{bucket_name}"],
             check=False,
             capture_output=True,
         )
@@ -369,7 +325,7 @@ def setup_terraform_backend(
             # Create bucket
             run_command(
                 [
-                    get_gcloud_path(),
+                    "gcloud",
                     "storage",
                     "buckets",
                     "create",
@@ -382,7 +338,7 @@ def setup_terraform_backend(
             # Enable versioning
             run_command(
                 [
-                    get_gcloud_path(),
+                    "gcloud",
                     "storage",
                     "buckets",
                     "update",
@@ -441,7 +397,7 @@ def create_or_update_secret(secret_id: str, secret_value: str, project_id: str) 
         try:
             run_command(
                 [
-                    get_gcloud_path(),
+                    "gcloud",
                     "secrets",
                     "versions",
                     "add",
@@ -457,7 +413,7 @@ def create_or_update_secret(secret_id: str, secret_value: str, project_id: str) 
             try:
                 run_command(
                     [
-                        get_gcloud_path(),
+                        "gcloud",
                         "secrets",
                         "create",
                         secret_id,
@@ -690,7 +646,7 @@ def setup_cicd(
             )
         if not repository_owner:
             repository_owner = run_command(
-                [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
+                ["gh", "api", "user", "--jq", ".login"], capture_output=True
             ).stdout.strip()
 
     assert repository_name is not None, "Repository name must be provided"
@@ -699,7 +655,7 @@ def setup_cicd(
     # Verify repository state matches the user's intent
     repo_exists = (
         run_command(
-            [get_gh_path(), "repo", "view", f"{repository_owner}/{repository_name}"],
+            ["gh", "repo", "view", f"{repository_owner}/{repository_name}"],
             capture_output=True,
             check=False,
         ).returncode
@@ -799,7 +755,7 @@ def setup_cicd(
         "repository_name": repository_name,
         "repository_owner": repository_owner
         or run_command(
-            [get_gh_path(), "api", "user", "--jq", ".login"], capture_output=True
+            ["gh", "api", "user", "--jq", ".login"], capture_output=True
         ).stdout.strip(),
     }
 

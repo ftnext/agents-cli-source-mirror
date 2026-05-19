@@ -293,7 +293,7 @@ async def serve_frontend_spa(full_path: str) -> FileResponse | dict:
         "Frontend not built. Run 'npm run build' in the frontend directory."
     )
     return {"status": "ok", "message": "Backend running. Frontend not built."}
-{% elif cookiecutter.is_adk %}
+{% else %}
 import os
 {%- if cookiecutter.is_a2a %}
 from collections.abc import AsyncIterator
@@ -478,83 +478,6 @@ app: FastAPI = get_fast_api_app(
 app.title = "{{cookiecutter.project_name}}"
 app.description = "API for interacting with the Agent {{cookiecutter.project_name}}"
 {%- endif %}
-{% else %}
-import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-
-from a2a.server.apps import A2AFastAPIApplication
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import AgentCapabilities, AgentCard, AgentSkill
-from a2a.utils.constants import (
-    AGENT_CARD_WELL_KNOWN_PATH,
-    EXTENDED_AGENT_CARD_PATH,
-)
-from fastapi import FastAPI
-from google.cloud import logging as google_cloud_logging
-
-from {{cookiecutter.agent_directory}}.agent import root_agent
-from {{cookiecutter.agent_directory}}.app_utils.executor.a2a_agent_executor import (
-    LangGraphAgentExecutor,
-)
-from {{cookiecutter.agent_directory}}.app_utils.telemetry import setup_telemetry
-from {{cookiecutter.agent_directory}}.app_utils.typing import Feedback
-
-setup_telemetry()
-
-request_handler = DefaultRequestHandler(
-    agent_executor=LangGraphAgentExecutor(graph=root_agent),
-    task_store=InMemoryTaskStore(),
-)
-
-A2A_RPC_PATH = "/a2a/{{cookiecutter.agent_directory}}"
-
-
-def build_agent_card() -> AgentCard:
-    """Builds the Agent Card for the LangGraph agent."""
-    skill = AgentSkill(
-        id="root_agent-get_weather",
-        name="get_weather",
-        description="Simulates a web search. Use it get information on weather.",
-        tags=["llm", "tools"],
-        examples=["What's the weather in San Francisco?"],
-    )
-    agent_card = AgentCard(
-        name="root_agent",
-        description="API for interacting with the Agent {{cookiecutter.project_name}}",
-        url=f"{os.getenv('APP_URL', 'http://0.0.0.0:8000')}{A2A_RPC_PATH}",
-        version=os.getenv("AGENT_VERSION", "0.1.0"),
-        default_input_modes=["text/plain"],
-        default_output_modes=["text/plain"],
-        capabilities=AgentCapabilities(streaming=True),
-        skills=[skill],
-    )
-    return agent_card
-
-
-@asynccontextmanager
-async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
-    agent_card = build_agent_card()
-    a2a_app = A2AFastAPIApplication(agent_card=agent_card, http_handler=request_handler)
-    a2a_app.add_routes_to_app(
-        app_instance,
-        agent_card_url=f"{A2A_RPC_PATH}{AGENT_CARD_WELL_KNOWN_PATH}",
-        rpc_url=A2A_RPC_PATH,
-        extended_agent_card_url=f"{A2A_RPC_PATH}{EXTENDED_AGENT_CARD_PATH}",
-    )
-    yield
-
-
-# Initialize FastAPI app and logging
-app = FastAPI(
-    title="{{cookiecutter.project_name}}",
-    description="API for interacting with the Agent {{cookiecutter.project_name}}",
-    lifespan=lifespan,
-)
-
-logging_client = google_cloud_logging.Client()
-logger = logging_client.logger(__name__)
 {% endif %}
 
 @app.post("/feedback")

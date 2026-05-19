@@ -36,11 +36,7 @@ def cmd_update(workspace, yes, interactive):
     Updates all installed skills to their latest versions via npx skills.
     """
     click.echo()
-
-    from google.agents.cli._tools import get_npx_path
-
-    npx_path = get_npx_path()
-    args = [npx_path, "-y", SKILLS_NPX_PACKAGE, "update"]
+    args = ["npx", "-y", SKILLS_NPX_PACKAGE, "update"]
     if not workspace:
         args.append("-g")
 

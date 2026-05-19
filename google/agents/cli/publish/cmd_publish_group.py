@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Converters for A2A and LangChain types."""
+"""agents-cli publish command group."""
 
-from .part_converter import (
-    convert_a2a_parts_to_langchain_content,
-    convert_langchain_content_to_a2a_parts,
+import click
+
+from google.agents.cli._click import LazyGroup
+
+
+@click.group("publish", cls=LazyGroup)
+def publish_group():
+    """Publish agents to various targets.
+
+    \b
+    Subcommands:
+      gemini-enterprise  Register an Agent Runtime to Gemini Enterprise
+    """
+
+
+publish_group.add_lazy_command(
+    "gemini-enterprise",
+    "google.agents.cli.publish.cmd_publish:register_gemini_enterprise",
+    "Register a deployed agent with Gemini Enterprise.",
 )
-
-__all__ = [
-    "convert_a2a_parts_to_langchain_content",
-    "convert_langchain_content_to_a2a_parts",
-]

@@ -69,7 +69,6 @@ def _find_installed_skills() -> dict[str, str]:
     when skills are installed to a non-default location.
     """
     import json
-    import subprocess
 
     result: dict[str, str] = {}
 
@@ -88,11 +87,10 @@ def _find_installed_skills() -> dict[str, str]:
 
     # Slow path: ask npx skills for actual install locations
     try:
-        from google.agents.cli._tools import get_npx_path
+        from google.agents.cli._runner import run_resolved
 
-        npx_path = get_npx_path()
-        proc = subprocess.run(
-            [npx_path, "-y", "skills", "list", "--json"],
+        proc = run_resolved(
+            ["npx", "-y", "skills", "list", "--json"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -121,14 +119,12 @@ def get_installed_skills() -> list[dict] | None:
     Returns None if the query fails.
     """
     import json
-    import subprocess
 
     try:
-        from google.agents.cli._tools import get_npx_path
+        from google.agents.cli._runner import run_resolved
 
-        npx_path = get_npx_path()
-        result = subprocess.run(
-            [npx_path, "-y", SKILLS_NPX_PACKAGE, "list", "--json"],
+        result = run_resolved(
+            ["npx", "-y", SKILLS_NPX_PACKAGE, "list", "--json"],
             capture_output=True,
             text=True,
             timeout=15,

@@ -17,7 +17,6 @@
 import logging
 import pathlib
 import shutil
-import subprocess
 import tempfile
 
 import click
@@ -25,11 +24,11 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from google.agents.cli._project import find_project_root
+from google.agents.cli._tools import ToolNotFoundError, require_tool
 
 from ..utils.generation_metadata import metadata_to_cli_args
 from ..utils.language import (
     get_language_config,
-    update_acli_version,
 )
 from ..utils.merge import (
     apply_changes,
@@ -40,6 +39,8 @@ from ..utils.upgrade import (
     compare_all_files,
     group_results_by_action,
     merge_pyproject_dependencies,
+    migrate_legacy_python_config,
+    update_acli_metadata,
     write_merged_dependencies,
 )
 from ..utils.version import get_current_version
@@ -51,9 +52,9 @@ console = Console()
 def _ensure_uvx_available() -> bool:
     """Check if uvx is available."""
     try:
-        subprocess.run(["uvx", "--version"], capture_output=True, check=True)
+        require_tool("uvx")
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except ToolNotFoundError:
         return False
 
 
@@ -120,13 +121,12 @@ def upgrade(
         project_dir = project_root_dir
         console.print(f"[dim]Resolved project root to: {project_dir}[/dim]")
 
+    migrate_legacy_python_config(project_dir, dry_run=dry_run)
+
     metadata = get_project_acli_config(project_dir)
     if not metadata:
         console.print("[bold red]Error:[/bold red] No agents-cli metadata found.")
-        console.print(
-            "Ensure pyproject.toml has \\[tool.agents-cli] section "
-            "or .acli.toml has \\[project] section."
-        )
+        console.print("Ensure agents-cli-manifest.yaml exists in your project root.")
         raise SystemExit(1)
 
     # Get language from metadata for language-aware operations
@@ -138,12 +138,9 @@ def upgrade(
         console.print(
             "[bold red]Error:[/bold red] No acli_version found in project metadata."
         )
-        lang_config = get_language_config(language)
-        config_file = lang_config.get("config_file", "pyproject.toml")
-        version_key = lang_config.get("version_key", "acli_version")
         console.print(
-            f"The project metadata is missing the version. "
-            f"Please ensure {config_file} has {version_key} set."
+            "The project metadata is missing the version. "
+            "Please ensure agents-cli-manifest.yaml has acli_version set."
         )
         raise SystemExit(1)
 
@@ -278,9 +275,11 @@ def upgrade(
                 dep_result.merged_deps,
             )
 
-        # Update metadata version using language-aware utility
+        # Update metadata version using unified YAML manifest utility
         if not dry_run:
-            update_acli_version(project_dir, language, new_version)
+            update_acli_metadata(
+                project_dir, {}, acli_version=new_version, language=language
+            )
 
         # Summary
         console.print()
