@@ -16,32 +16,18 @@
 
 import logging
 import pathlib
-import shutil
-import tempfile
 
 import click
 from rich.console import Console
-from rich.prompt import Prompt
 
 from google.agents.cli._project import find_project_root
 from google.agents.cli._tools import ToolNotFoundError, require_tool
 
 from ..utils.generation_metadata import metadata_to_cli_args
-from ..utils.language import (
-    get_language_config,
-)
-from ..utils.merge import (
-    apply_changes,
-    display_results,
-    run_create_command,
-)
+from ..utils.merge import run_three_way_merge
 from ..utils.upgrade import (
-    compare_all_files,
-    group_results_by_action,
-    merge_pyproject_dependencies,
     migrate_legacy_python_config,
     update_acli_metadata,
-    write_merged_dependencies,
 )
 from ..utils.version import get_current_version
 from .enhance import get_project_acli_config
@@ -74,6 +60,7 @@ def _display_version_header(old_version: str, new_version: str) -> None:
 )
 @click.option(
     "--dry-run",
+    "--dryrun",
     is_flag=True,
     help="Preview changes without applying them",
 )
@@ -170,136 +157,28 @@ def upgrade(
     agent_directory = metadata.get("agent_directory", "app")
     cli_args = metadata_to_cli_args(metadata)
 
-    # Create temp directories for re-templating
-    temp_base = pathlib.Path(tempfile.mkdtemp(prefix="acli_upgrade_"))
-    old_template_dir = temp_base / "old"
-    new_template_dir = temp_base / "new"
+    # Post-apply: stamp the new version into the manifest
+    def _update_version(proj_dir: pathlib.Path, lang: str) -> None:
+        update_acli_metadata(proj_dir, {}, acli_version=new_version, language=lang)
 
-    try:
-        console.print("[dim]Generating template versions for comparison...[/dim]")
+    success = run_three_way_merge(
+        project_dir=project_dir,
+        project_name=project_name,
+        agent_directory=agent_directory,
+        language=language,
+        old_args=cli_args,
+        new_args=cli_args,
+        old_version=old_version,
+        auto_approve=auto_approve,
+        dry_run=dry_run,
+        interactive=interactive,
+        operation_label="upgrade",
+        post_apply_hook=_update_version,
+    )
 
-        # Re-template old version
-        console.print(f"[dim]  - Old template (v{old_version})...[/dim]")
-        if not run_create_command(cli_args, old_template_dir, project_name, old_version):
-            console.print(
-                f"[bold red]Error:[/bold red] Failed to generate old template (v{old_version})"
-            )
-            console.print(
-                "[dim]This version may not be available. Try upgrading from a more recent version.[/dim]"
-            )
-            raise SystemExit(1)
-
-        # Re-template new version
-        console.print(f"[dim]  - New template (v{new_version})...[/dim]")
-        if not run_create_command(cli_args, new_template_dir, project_name):
-            console.print(
-                f"[bold red]Error:[/bold red] Failed to generate new template (v{new_version})"
-            )
-            raise SystemExit(1)
-
-        # The templates are created in subdirectories named after the project
-        old_template_project = old_template_dir / project_name
-        new_template_project = new_template_dir / project_name
-
-        console.print()
-
-        # Compare all files
-        console.print("[dim]Comparing files...[/dim]")
-        results = compare_all_files(
-            project_dir,
-            old_template_project,
-            new_template_project,
-            agent_directory,
+    if not success:
+        console.print(
+            "[dim]This version may not be available. "
+            "Try upgrading from a more recent version.[/dim]"
         )
-
-        # Group by action
-        groups = group_results_by_action(results)
-
-        # Handle dependency merging (only for languages that strip dependencies)
-        lang_config = get_language_config(language)
-        dep_result = None
-        if lang_config.get("strip_dependencies", True):
-            dep_result = merge_pyproject_dependencies(
-                project_dir / "pyproject.toml",
-                old_template_project / "pyproject.toml",
-                new_template_project / "pyproject.toml",
-            )
-
-        console.print()
-
-        # Display results
-        display_results(groups, dep_result.changes if dep_result else [], dry_run)
-
-        # Check if there's anything to do
-        total_changes = (
-            len(groups["auto_update"])
-            + len(groups["new"])
-            + len(groups["removed"])
-            + len(groups["conflict"])
-        )
-
-        has_dep_changes = dep_result and dep_result.changes
-        if total_changes == 0 and not has_dep_changes:
-            console.print("[bold green]✅[/bold green] No changes needed!")
-            return
-
-        # Confirm before applying (only in interactive mode)
-        if interactive and not dry_run:
-            prompt_text = "\nProceed with upgrade?"
-            if groups["conflict"]:
-                prompt_text = "\nProceed? (you'll resolve conflicts next)"
-            proceed = Prompt.ask(
-                prompt_text,
-                choices=["y", "n"],
-                case_sensitive=False,
-                default="y",
-            ).lower()
-            if proceed != "y":
-                console.print("[yellow]Upgrade cancelled.[/yellow]")
-                return
-
-        # Apply changes
-        counts = apply_changes(
-            groups=groups,
-            project_dir=project_dir,
-            new_template_dir=new_template_project,
-            auto_approve=auto_approve,
-            dry_run=dry_run,
-            interactive=interactive,
-        )
-
-        # Apply dependency changes (Python only)
-        if not dry_run and dep_result and dep_result.changes:
-            write_merged_dependencies(
-                project_dir / "pyproject.toml",
-                dep_result.merged_deps,
-            )
-
-        # Update metadata version using unified YAML manifest utility
-        if not dry_run:
-            update_acli_metadata(
-                project_dir, {}, acli_version=new_version, language=language
-            )
-
-        # Summary
-        console.print()
-        if dry_run:
-            console.print(
-                "[bold yellow]Dry run complete.[/bold yellow] "
-                "Run without --dry-run to apply changes."
-            )
-        else:
-            console.print(f"  Updated: {counts['updated']} files")
-            console.print(f"  Added: {counts['added']} files")
-            console.print(f"  Removed: {counts['removed']} files")
-            if counts["conflicts_kept"] or counts["conflicts_updated"]:
-                console.print(
-                    f"  Conflicts: {counts['conflicts_updated']} updated, "
-                    f"{counts['conflicts_kept']} kept yours"
-                )
-            console.print()
-            console.print("[bold green]✅ Upgrade complete![/bold green]")
-
-    finally:
-        # Cleanup temp directories
-        shutil.rmtree(temp_base, ignore_errors=True)
+        raise SystemExit(1)

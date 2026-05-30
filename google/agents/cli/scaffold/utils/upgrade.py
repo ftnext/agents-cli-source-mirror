@@ -590,12 +590,13 @@ def migrate_legacy_python_config(
     if not pyproject_path.exists():
         return
 
+    import tomlkit
+
     content = pyproject_path.read_text(encoding="utf-8")
+    doc = tomlkit.parse(content)
 
-    with open(pyproject_path, "rb") as f:
-        pyproject_data = tomllib.load(f)
-
-    acli = pyproject_data.get("tool", {}).get("agents-cli")
+    tool_section = doc.get("tool", {})
+    acli = tool_section.get("agents-cli")
     if acli is None:
         return
 
@@ -621,12 +622,14 @@ def migrate_legacy_python_config(
 
     # Reconstruct new manifest content
     manifest_data = {}
-    name = pyproject_data.get("project", {}).get("name") or acli.get("name")
+    project_section = doc.get("project", {})
+    name = project_section.get("name") or acli.get("name")
     if name:
-        manifest_data["name"] = name
+        manifest_data["name"] = str(name)
 
     # Copy all config parameters directly, except name
-    for k, v in acli.items():
+    acli_unwrapped = acli.unwrap()
+    for k, v in acli_unwrapped.items():
         if k != "name" and v is not None:
             manifest_data[k] = v
 
@@ -636,23 +639,10 @@ def migrate_legacy_python_config(
         yaml.safe_dump(manifest_data, f, default_flow_style=False, sort_keys=False)
 
     # Remove legacy tool config lines from pyproject.toml last, after manifest write succeeds
-    lines = content.splitlines()
-    new_lines = []
-    skip = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("[tool.agents-cli"):
-            skip = True
-            continue
-        if (
-            skip
-            and stripped.startswith("[")
-            and not stripped.startswith("[tool.agents-cli")
-        ):
-            skip = False
-        if not skip:
-            new_lines.append(line)
-    pyproject_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    del tool_section["agents-cli"]
+    if not tool_section:
+        del doc["tool"]
+    pyproject_path.write_text(tomlkit.dumps(doc), encoding="utf-8")
 
     import click
 

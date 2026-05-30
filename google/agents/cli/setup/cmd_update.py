@@ -17,7 +17,6 @@
 import click
 
 from google.agents.cli._runner import run
-from google.agents.cli._skills_check import SKILLS_NPX_PACKAGE
 from google.agents.cli._trust import require_confirmation
 from google.agents.cli.setup.cmd_setup import _run_npx_skills
 
@@ -36,7 +35,7 @@ def cmd_update(workspace, yes, interactive):
     Updates all installed skills to their latest versions via npx skills.
     """
     click.echo()
-    args = ["npx", "-y", SKILLS_NPX_PACKAGE, "update"]
+    args = ["update"]
     if not workspace:
         args.append("-g")
 

@@ -24,14 +24,13 @@ from urllib.parse import urlparse
 
 import click
 import requests
-from google.auth import default
 from packaging import version
 from rich.console import Console
 from rich.table import Table
 
 from google.agents.cli._runner import run_resolved
 from google.agents.cli._tools import ToolNotFoundError
-from google.agents.cli.auth import get_access_token, get_id_token
+from google.agents.cli.auth import get_access_token, get_adc_credentials, get_id_token
 from google.agents.cli.scaffold.utils.command import run_gcloud_command
 from google.agents.cli.scaffold.utils.gcp import (
     get_user_agent,
@@ -543,7 +542,7 @@ def get_current_project_id() -> str | None:
         Project ID string, or None if not configured
     """
     try:
-        _, project_id = default()
+        _, project_id = get_adc_credentials()
         return project_id
     except Exception:
         return None

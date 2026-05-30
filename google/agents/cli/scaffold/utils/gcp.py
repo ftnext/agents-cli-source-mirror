@@ -74,12 +74,11 @@ def _get_credentials_and_token() -> tuple:
     Returns:
         Tuple of (credentials, project, token)
     """
-    import google.auth
     import google.auth.transport.requests
 
-    credentials, project = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
+    from google.agents.cli.auth import get_adc_credentials
+
+    credentials, project = get_adc_credentials()
 
     # Refresh credentials to get valid token
     auth_req = google.auth.transport.requests.Request()

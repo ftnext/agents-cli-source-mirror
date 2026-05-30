@@ -120,6 +120,7 @@ def _build_psc_interface_config(
 )
 @click.option(
     "--dry-run",
+    "--dryrun",
     "-n",
     is_flag=True,
     default=False,
@@ -314,7 +315,7 @@ def cmd_deploy(
         )
         service_name = cfg.project_name or "agent"
 
-        args = ["gcloud", "beta", "run", "deploy", service_name]
+        args = ["gcloud", "run", "deploy", service_name]
         if project:
             args.extend(["--project", project])
         if region:
@@ -712,15 +713,16 @@ def _list_agent_runtime_deployments(project: str | None, location: str) -> None:
     """List Agent Runtime deployments via the Vertex AI SDK."""
     import warnings
 
-    import google.auth
     import vertexai
+
+    from google.agents.cli.auth import get_adc_credentials
 
     warnings.filterwarnings(
         "ignore", category=FutureWarning, module="google.cloud.aiplatform"
     )
 
     if not project:
-        _, project = google.auth.default()
+        _, project = get_adc_credentials()
     if not project:
         raise click.ClickException(
             "Could not determine GCP project. Pass --project or set a default project."

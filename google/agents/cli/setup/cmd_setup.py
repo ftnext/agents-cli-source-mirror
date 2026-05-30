@@ -78,6 +78,8 @@ def _get_source_root():
 def _run_npx_skills(args, spinner_msg):
     """Run an npx skills command, streaming output in real-time.
 
+    Always starts with ``["npx", "-y", SKILLS_NPX_PACKAGE]`` and appends
+    the additional ``args`` provided.
     Streams stdout/stderr line-by-line, filtering npm/npx boilerplate.
     All non-noise lines are printed immediately. Only concise summary
     lines (e.g. "Installed 6 skills", "Found 6 skills") are collected
@@ -89,11 +91,12 @@ def _run_npx_skills(args, spinner_msg):
     Raises:
         click.ClickException: If the npx process exits non-zero.
     """
-    click.secho(f"  \u25b8 {shlex.join(args)}", fg="cyan", dim=True)
+    full_args = ["npx", "-y", SKILLS_NPX_PACKAGE, *args]
+    click.secho(f"  \u25b8 {shlex.join(full_args)}", fg="cyan", dim=True)
 
     summary_lines = []
     proc = popen_resolved(
-        args,
+        full_args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -213,6 +216,7 @@ def _check_legacy_skills():
 )
 @click.option(
     "--dry-run",
+    "--dryrun",
     is_flag=True,
     default=False,
     help="Show what would be done without making changes.",
@@ -235,15 +239,24 @@ def _check_legacy_skills():
     default=None,
     help="Skills source: local path, GitHub owner/repo, or URL. Overrides the bundled skills.",
 )
-def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source):
+@click.option(
+    "--agent",
+    multiple=True,
+    help=(
+        "Specify the agent to install skills to (e.g. --agent claude-code --agent cursor). "
+        "Use 'all' to install for all supported agents."
+    ),
+)
+def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source, agent):
     """Install agents-cli and skills to detected coding agents.
 
     Installs the agents-cli tool (via uv tool install) and detects
     installed coding agents (Claude Code, Gemini CLI, Cursor,
     Windsurf, etc.) to install ADK development skills via npx skills.
 
-    By default, skills are installed globally.
+    By default, skills are installed globally for all detected agents.
     Use --workspace to install at the project level instead.
+    Use --agent to specify specific coding agents (e.g. --agent claude-code --agent cursor) or 'all'.
     Use --dry-run to preview what would happen without executing.
     Use --dev to install agents-cli as editable from the local repo (for contributors).
     Use --interactive / -i to enable interactive authentication if not already logged in.
@@ -266,7 +279,12 @@ def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source)
             source = str(source_path.resolve())
         else:
             source = skills_source
-    args = ["npx", "-y", SKILLS_NPX_PACKAGE, "add", source, "-y", "--all"]
+    args = ["add", source, "-y"]
+    if "all" in agent:
+        args.append("--all")
+    elif agent:
+        for a in agent:
+            args.extend(["--agent", a])
     if not workspace:
         args.append("-g")
 
@@ -295,7 +313,8 @@ def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source)
             )
         click.echo()
         click.echo("  Would install skills:")
-        click.secho(f"  \u25b8 {shlex.join(args)}", fg="cyan", dim=True)
+        full_args = ["npx", "-y", SKILLS_NPX_PACKAGE, *args]
+        click.secho(f"  \u25b8 {shlex.join(full_args)}", fg="cyan", dim=True)
         click.echo(f"  Scope: {scope}")
         click.echo()
 

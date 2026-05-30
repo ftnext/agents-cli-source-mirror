@@ -15,19 +15,31 @@
 """Shared merge utilities for upgrade and enhance commands.
 
 Functions for generating templates, displaying comparison results,
-resolving conflicts, and applying file changes.
+resolving conflicts, and applying file changes.  The central
+``run_three_way_merge`` orchestrator is used by both the *upgrade* and
+*enhance* commands to avoid duplicating the merge pipeline.
 """
 
 import difflib
 import logging
 import pathlib
 import shutil
+import tempfile
+from collections.abc import Callable
 
 from rich.console import Console
 from rich.markup import escape
 from rich.prompt import Prompt
 
-from .upgrade import DependencyChange, FileCompareResult
+from .language import get_language_config
+from .upgrade import (
+    DependencyChange,
+    FileCompareResult,
+    compare_all_files,
+    group_results_by_action,
+    merge_pyproject_dependencies,
+    write_merged_dependencies,
+)
 
 console = Console()
 
@@ -345,3 +357,198 @@ def apply_changes(
             counts["skipped"] += 1
 
     return counts
+
+
+def run_three_way_merge(
+    *,
+    project_dir: pathlib.Path,
+    project_name: str,
+    agent_directory: str,
+    language: str,
+    old_args: list[str],
+    new_args: list[str],
+    old_version: str | None = None,
+    auto_approve: bool,
+    dry_run: bool,
+    prefer_new: bool = False,
+    interactive: bool = False,
+    operation_label: str = "upgrade",
+    pre_apply_hook: Callable[[pathlib.Path], bool] | None = None,
+    post_apply_hook: Callable[[pathlib.Path, str], None] | None = None,
+) -> bool:
+    """Shared 3-way merge pipeline used by both *upgrade* and *enhance*.
+
+    Generates old and new template snapshots, compares every file against
+    the current project, displays the diff summary, and applies changes.
+
+    Args:
+        project_dir: Resolved path to the user's project.
+        project_name: Name used when generating the template.
+        agent_directory: Subdirectory containing agent code (e.g. "app").
+        language: Project language (e.g. "python").
+        old_args: CLI args for re-creating the *old* template snapshot.
+        new_args: CLI args for re-creating the *new* template snapshot.
+        old_version: If set, passed to ``run_create_command`` for the old
+            template (used by *upgrade* to re-template at a prior version).
+        auto_approve: Auto-apply non-conflicting changes without prompts.
+        dry_run: Preview changes without writing anything.
+        prefer_new: Resolve conflicts in favour of the new template.
+        interactive: Allow interactive conflict-resolution prompts.
+        operation_label: Human-readable verb for prompt/log text
+            (``"upgrade"`` or ``"enhancement"``).
+        pre_apply_hook: Optional callback invoked *before* files are
+            written.  Receives ``project_dir``.  Return ``False`` to abort.
+        post_apply_hook: Optional callback invoked *after* files are
+            written (and deps merged).  Receives ``(project_dir, language)``.
+
+    Returns:
+        ``True`` if the pipeline completed (changes applied, user
+        cancelled, or nothing to do).  ``False`` if template generation
+        failed and the caller should fall back to an alternative strategy.
+    """
+    same_config = sorted(old_args) == sorted(new_args) and old_version is None
+
+    temp_base = pathlib.Path(tempfile.mkdtemp(prefix=f"acli_{operation_label}_"))
+    old_template_dir = temp_base / "old"
+    new_template_dir = temp_base / "new"
+
+    try:
+        console.print()
+        console.print("[dim]Generating templates for comparison...[/dim]")
+
+        if same_config:
+            # Optimisation: identical args -> generate once, reuse for both.
+            console.print("[dim]  - Template...[/dim]")
+            if not run_create_command(old_args, old_template_dir, project_name):
+                console.print("[bold red]Error:[/bold red] Failed to generate template")
+                return False
+            old_template_project = old_template_dir / project_name
+            new_template_project = old_template_project  # same reference
+        else:
+            # Generate old template
+            console.print("[dim]  - Old template...[/dim]")
+            if not run_create_command(
+                old_args, old_template_dir, project_name, old_version
+            ):
+                console.print(
+                    "[bold red]Error:[/bold red] Failed to generate old template"
+                )
+                return False
+
+            # Generate new template
+            console.print("[dim]  - New template...[/dim]")
+            if not run_create_command(new_args, new_template_dir, project_name):
+                console.print(
+                    "[bold red]Error:[/bold red] Failed to generate new template"
+                )
+                return False
+
+            old_template_project = old_template_dir / project_name
+            new_template_project = new_template_dir / project_name
+
+        console.print()
+
+        # ── Compare ──────────────────────────────────────────────────
+        console.print("[dim]Comparing files...[/dim]")
+        results = compare_all_files(
+            project_dir,
+            old_template_project,
+            new_template_project,
+            agent_directory,
+        )
+        groups = group_results_by_action(results)
+
+        # ── Dependency merging ───────────────────────────────────────
+        lang_config = get_language_config(language)
+        dep_result = None
+        if lang_config.get("strip_dependencies", True):
+            dep_result = merge_pyproject_dependencies(
+                project_dir / "pyproject.toml",
+                old_template_project / "pyproject.toml",
+                new_template_project / "pyproject.toml",
+            )
+
+        console.print()
+
+        # ── Display ──────────────────────────────────────────────────
+        display_results(groups, dep_result.changes if dep_result else [], dry_run)
+
+        total_changes = (
+            len(groups["auto_update"])
+            + len(groups["new"])
+            + len(groups["removed"])
+            + len(groups["conflict"])
+        )
+        has_dep_changes = dep_result and dep_result.changes
+        if total_changes == 0 and not has_dep_changes:
+            console.print("[bold green]\u2705[/bold green] No changes needed!")
+            return True
+
+        # ── Confirm ──────────────────────────────────────────────────
+        if interactive and not dry_run:
+            prompt_text = f"\nProceed with {operation_label}?"
+            if groups["conflict"]:
+                prompt_text = "\nProceed? (you'll resolve conflicts next)"
+            proceed = Prompt.ask(
+                prompt_text,
+                choices=["y", "n"],
+                case_sensitive=False,
+                default="y",
+            ).lower()
+            if proceed != "y":
+                console.print(
+                    f"[yellow]{operation_label.capitalize()} cancelled.[/yellow]"
+                )
+                return True
+
+        # ── Pre-apply hook (e.g. backup) ─────────────────────────────
+        if pre_apply_hook and not dry_run:
+            if not pre_apply_hook(project_dir):
+                return True  # hook signalled abort (e.g. user cancelled backup)
+
+        # ── Apply ────────────────────────────────────────────────────
+        counts = apply_changes(
+            groups=groups,
+            project_dir=project_dir,
+            new_template_dir=new_template_project,
+            auto_approve=auto_approve,
+            dry_run=dry_run,
+            prefer_new=prefer_new,
+            interactive=interactive,
+        )
+
+        if not dry_run and dep_result and dep_result.changes:
+            write_merged_dependencies(
+                project_dir / "pyproject.toml",
+                dep_result.merged_deps,
+            )
+
+        # ── Post-apply hook (e.g. metadata update) ───────────────────
+        if post_apply_hook and not dry_run:
+            post_apply_hook(project_dir, language)
+
+        # ── Summary ──────────────────────────────────────────────────
+        console.print()
+        if dry_run:
+            console.print(
+                "[bold yellow]Dry run complete.[/bold yellow] "
+                "Run without --dry-run to apply changes."
+            )
+        else:
+            console.print(f"  Updated: {counts['updated']} files")
+            console.print(f"  Added: {counts['added']} files")
+            console.print(f"  Removed: {counts['removed']} files")
+            if counts["conflicts_kept"] or counts["conflicts_updated"]:
+                console.print(
+                    f"  Conflicts: {counts['conflicts_updated']} updated, "
+                    f"{counts['conflicts_kept']} kept yours"
+                )
+            console.print()
+            console.print(
+                f"[bold green]\u2705 {operation_label.capitalize()} complete![/bold green]"
+            )
+
+        return True
+
+    finally:
+        shutil.rmtree(temp_base, ignore_errors=True)

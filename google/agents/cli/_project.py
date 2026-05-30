@@ -94,27 +94,31 @@ def read_project_config(project_dir: str | None = None) -> ProjectConfig:
         # If neither works, return a default project config
         return ProjectConfig()
 
-    create_params = data.get("create_params", {})
-    project_name = data.get("name", "")
+    cfg = ProjectConfig()
 
-    return ProjectConfig(
-        project_name=project_name,
-        deployment_target=create_params.get("deployment_target", "none"),
-        agent_directory=data.get("agent_directory", "app"),
-        is_a2a=create_params.get("is_a2a", False),
-        requires_data_ingestion=create_params.get("include_data_ingestion", False),
-        region=data.get("region", "us-east1"),
-        extra={
-            k: v
-            for k, v in data.items()
-            if k
-            not in {
-                "agent_directory",
-                "region",
-                "name",
-            }
-        },
+    cfg.project_name = data.get("name", cfg.project_name)
+    cfg.agent_directory = data.get("agent_directory", cfg.agent_directory)
+    cfg.region = data.get("region", cfg.region)
+
+    create_params = data.get("create_params", {})
+    cfg.deployment_target = create_params.get("deployment_target", cfg.deployment_target)
+    cfg.is_a2a = create_params.get("is_a2a", cfg.is_a2a)
+    cfg.requires_data_ingestion = create_params.get(
+        "include_data_ingestion", cfg.requires_data_ingestion
     )
+
+    cfg.extra = {
+        k: v
+        for k, v in data.items()
+        if k
+        not in {
+            "agent_directory",
+            "region",
+            "name",
+        }
+    }
+
+    return cfg
 
 
 def check_cli_version(cfg: ProjectConfig) -> None:

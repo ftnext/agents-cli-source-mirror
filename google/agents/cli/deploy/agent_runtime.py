@@ -132,6 +132,17 @@ def format_env_value(value: Any) -> str:
     return str(value)
 
 
+def _get_resource_name_from_operation(operation_name: str) -> str:
+    """Extract ReasoningEngine resource name from long-running operation name.
+
+    GCP long-running operations on specific resources are guaranteed by API
+    standards to end with "/operations/{operation_id}". Extract the full
+    resource name by partitioning on "/operations/".
+    """
+    resource_name, _, _ = operation_name.rpartition("/operations/")
+    return resource_name
+
+
 def write_deployment_metadata(
     remote_agent: Any,
     cfg: ProjectConfig,
@@ -244,6 +255,23 @@ def _generate_requirements_file(requirements_path: str) -> None:
     """
     os.makedirs(os.path.dirname(requirements_path), exist_ok=True)
 
+    project_root = find_project_root() or "."
+    uv_lock_path = os.path.join(project_root, "uv.lock")
+    if not os.path.exists(uv_lock_path):
+        click.echo("  🔒 No uv.lock found. Running 'uv sync' to generate one...")
+        try:
+            run_resolved(
+                ["uv", "sync"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            raise click.ClickException(
+                "Failed to run 'uv sync' to generate uv.lock"
+            ) from e
+
     base_cmd = [
         "uv",
         "export",
@@ -339,8 +367,11 @@ def deploy_agent_runtime(
     Returns:
         The deployed AgentEngine instance, or None when no_wait is True.
     """
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    if location == "global":
+        raise click.ClickException(
+            "Region 'global' is not supported for Agent Runtime deployments.\n"
+            "  Please specify a regional location (e.g., 'us-central1', 'us-east1') via --region or in your project config."
+        )
 
     agent_dir = cfg.agent_directory
     display_name = display_name or cfg.project_name or "agent"
@@ -519,10 +550,14 @@ def deploy_agent_runtime(
     completed_op = client.agent_engines._get_agent_operation(
         operation_name=operation.name,
     )
-    remote_agent = AgentEngine(
-        api_client=client.agent_engines,
-        api_resource=completed_op.response,
-    )
+    if completed_op.error:
+        clear_operation()
+        raise click.ClickException(f"Deployment failed: {completed_op.error}")
+
+    # Retrieve the newly created/updated agent engine using the public client.agent_engines.get()
+    # to ensure all fields (including the api_resource name) are fully loaded and populated.
+    resource_name = _get_resource_name_from_operation(operation.name)
+    remote_agent = client.agent_engines.get(name=resource_name)
 
     # Clear secrets if explicitly set to empty
     if (
@@ -621,13 +656,11 @@ def check_agent_runtime_operation(
             clear_operation()
             raise click.ClickException(f"Deployment failed: {operation.error}")
 
-        # Build an AgentEngine wrapper from the completed operation
-        from vertexai._genai.types import AgentEngine
+        # Retrieve the newly created/updated agent engine using the public client.agent_engines.get()
+        # to ensure all fields (including the api_resource name) are fully loaded and populated.
+        resource_name = _get_resource_name_from_operation(operation_name)
+        remote_agent = client.agent_engines.get(name=resource_name)
 
-        remote_agent = AgentEngine(
-            api_client=client.agent_engines,
-            api_resource=operation.response,
-        )
         write_deployment_metadata(remote_agent, cfg)
         print_deployment_success(remote_agent, location, project, cfg)
         clear_operation()

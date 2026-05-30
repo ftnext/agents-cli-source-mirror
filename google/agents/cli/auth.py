@@ -28,6 +28,7 @@ import enum
 import os
 import subprocess
 import webbrowser
+from typing import Any
 
 import click
 
@@ -73,6 +74,34 @@ def _api_key_instructions(var_name):
 
 
 # ── Google Cloud (ADC) ──────────────────────────────────────────────
+
+
+_adc_credentials = None
+
+
+def get_adc_credentials() -> tuple[Any, str | None]:
+    """Get Application Default Credentials, caching the result as a singleton.
+
+    The credentials object already handles token expiration / refresh etc
+    internally so this is safe.
+
+    The credentials returned are Any-typed because they can actually take
+    quite a few forms in practice. e.g. if authed as a service account
+    `service_account_email` will be present, but if authed as a user
+    it will not be.
+
+    Returns:
+        A tuple of (credentials, project_id).
+    """
+    global _adc_credentials
+    if _adc_credentials is None:
+        import google.auth
+
+        _adc_credentials = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+
+    return _adc_credentials
 
 
 def _setup_google_cloud_adc():
@@ -375,7 +404,7 @@ def is_authenticated():
 
 
 def _check_valid_adc():
-    # google.auth.default() doesnt' actually validate credentials
+    # google.auth.default() doesn't actually validate credentials
     # until you try to refresh them. That refresh can be extremely slow
     # if credentials are missing or invalid, so we use the gcloud version
     # which goes much faster.
@@ -386,16 +415,25 @@ def _check_valid_adc():
             capture_output=True,
         )
         return True
+    except ToolNotFoundError:
+        # If gcloud is not installed, fallback to the slower google.auth.default() means of checking
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request as GoogleAuthRequest
+
+            credentials, _ = google.auth.default()
+            credentials.refresh(GoogleAuthRequest())
+            return True
+        except Exception:
+            return False
     except subprocess.CalledProcessError:
         return False
 
 
 def _get_adc_project():
     """Return the ADC project"""
-    import google.auth
-
     try:
-        _, project = google.auth.default()
+        _, project = get_adc_credentials()
         return project
     except Exception:
         return None
@@ -413,15 +451,12 @@ def get_access_token() -> str:
     Raises:
         RuntimeError: If both paths fail.
     """
-    from google.auth import default
     from google.auth.transport.requests import Request as GoogleAuthRequest
 
     from google.agents.cli.scaffold.utils.command import run_gcloud_command
 
     try:
-        credentials, _ = default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
+        credentials, _ = get_adc_credentials()
         credentials.refresh(GoogleAuthRequest())
         if credentials.token:
             return credentials.token
@@ -450,15 +485,12 @@ def get_id_token(audience: str) -> str:
         subprocess.CalledProcessError: If both paths fail.
     """
     import requests
-    from google.auth import default
     from google.auth.transport.requests import Request as GoogleAuthRequest
 
     from google.agents.cli.scaffold.utils.command import run_gcloud_command
 
     try:
-        credentials, _ = default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
+        credentials, _ = get_adc_credentials()
         credentials.refresh(GoogleAuthRequest())
         sa_email = credentials.service_account_email
         iam_response = requests.post(

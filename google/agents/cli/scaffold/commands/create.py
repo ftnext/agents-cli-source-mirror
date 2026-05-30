@@ -1398,10 +1398,10 @@ def _handle_interactive_credentials(context: str | None = None) -> dict:
         creds_info = verify_credentials_and_vertex(context=context, interactive=True)
     except Exception:
         # If verification fails, we still want to show what we can and let user fix it
-        import google.auth
+        from google.agents.cli.auth import get_adc_credentials
 
         try:
-            credentials, project = google.auth.default()
+            credentials, project = get_adc_credentials()
             account = getattr(credentials, "service_account_email", None) or getattr(
                 credentials, "_account", None
             )

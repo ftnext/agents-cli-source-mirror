@@ -16,10 +16,8 @@ import logging
 import os
 import pathlib
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
 import tomllib
 from typing import Any
 
@@ -41,11 +39,7 @@ from ..utils.language import (
     validate_agent_file,
 )
 from ..utils.logging import display_welcome_banner
-from ..utils.merge import (
-    apply_changes,
-    display_results,
-    run_create_command,
-)
+from ..utils.merge import run_three_way_merge
 from ..utils.template import (
     get_available_agents,
     get_deployment_targets,
@@ -56,13 +50,7 @@ from ..utils.template import (
     resolve_agent_alias,
     validate_agent_directory_name,
 )
-from ..utils.upgrade import (
-    compare_all_files,
-    group_results_by_action,
-    merge_pyproject_dependencies,
-    update_acli_metadata,
-    write_merged_dependencies,
-)
+from ..utils.upgrade import update_acli_metadata
 from ..utils.version import get_current_version
 from .create import (
     create,
@@ -818,176 +806,54 @@ def _run_smart_merge(
     # Build args for the "new" template (with enhance overrides merged)
     new_args = _build_enhance_create_args(project_config, cli_overrides)
 
-    same_config = sorted(old_args) == sorted(new_args)
-
-    # Create temp directories
-    temp_base = pathlib.Path(tempfile.mkdtemp(prefix="acli_enhance_"))
-    old_template_dir = temp_base / "old"
-    new_template_dir = temp_base / "new"
-
-    try:
-        console.print()
-        console.print("[dim]Generating templates for comparison...[/dim]")
-        if same_config:
-            # Only generate one template, use as both old and new
-            console.print("[dim]  - Template...[/dim]")
-            if not run_create_command(old_args, old_template_dir, project_name):
-                console.print("[bold red]Error:[/bold red] Failed to generate template")
-                console.print("[dim]Falling back to standard overwrite mode.[/dim]")
-                return False
-            old_template_project = old_template_dir / project_name
-            new_template_project = old_template_project  # same reference
-        else:
-            # Generate old template (what was originally generated)
-            console.print("[dim]  - Original template...[/dim]")
-            if not run_create_command(old_args, old_template_dir, project_name):
-                console.print(
-                    "[bold red]Error:[/bold red] Failed to generate original template"
-                )
-                console.print("[dim]Falling back to standard overwrite mode.[/dim]")
-                return False
-
-            # Generate new template (with enhance params)
-            console.print("[dim]  - Enhanced template...[/dim]")
-            if not run_create_command(new_args, new_template_dir, project_name):
-                console.print(
-                    "[bold red]Error:[/bold red] Failed to generate enhanced template"
-                )
-                console.print("[dim]Falling back to standard overwrite mode.[/dim]")
-                return False
-
-            old_template_project = old_template_dir / project_name
-            new_template_project = new_template_dir / project_name
-
-        console.print()
-
-        # Compare all files
-        console.print("[dim]Comparing files...[/dim]")
-        results = compare_all_files(
-            project_dir,
-            old_template_project,
-            new_template_project,
-            agent_directory,
-        )
-
-        # Group by action
-        groups = group_results_by_action(results)
-
-        # Handle dependency merging (only for Python projects)
-        lang_config = get_language_config(language)
-        dep_result = None
-        if lang_config.get("strip_dependencies", True):
-            dep_result = merge_pyproject_dependencies(
-                project_dir / "pyproject.toml",
-                old_template_project / "pyproject.toml",
-                new_template_project / "pyproject.toml",
+    # -- Pre-apply hook: back up the project before writing changes ----------
+    def _backup(proj_dir: pathlib.Path) -> bool:
+        try:
+            create_project_backup(
+                proj_dir,
+                console=console,
+                auto_approve=auto_approve,
+                interactive=interactive,
             )
-
-        console.print()
-
-        # Display results
-        display_results(groups, dep_result.changes if dep_result else [], dry_run)
-
-        # Check if there's anything to do
-        total_changes = (
-            len(groups["auto_update"])
-            + len(groups["new"])
-            + len(groups["removed"])
-            + len(groups["conflict"])
-        )
-
-        has_dep_changes = dep_result and dep_result.changes
-        if total_changes == 0 and not has_dep_changes:
-            console.print("[bold green]✅[/bold green] No file changes needed!")
             return True
+        except click.Abort:
+            return False  # user cancelled
 
-        # Confirm before applying (only in interactive mode)
-        if interactive and not dry_run:
-            prompt_text = "\nProceed with enhancement?"
-            if groups["conflict"]:
-                prompt_text = "\nProceed? (you'll resolve conflicts next)"
-            proceed = Prompt.ask(
-                prompt_text,
-                choices=["y", "n"],
-                case_sensitive=False,
-                default="y",
-            ).lower()
-            if proceed != "y":
-                console.print("[yellow]Enhancement cancelled.[/yellow]")
-                return True  # Return True since user chose to cancel
+    # -- Post-apply hook: update manifest with new config --------------------
+    def _update_metadata(proj_dir: pathlib.Path, lang: str) -> None:
+        if not cli_overrides:
+            return
+        metadata_updates = {
+            k: v
+            for k, v in cli_overrides.items()
+            if isinstance(v, str) and not _should_skip_config_value(v)
+        }
+        stale_keys = _stale_manifest_keys_for_target(cli_overrides, project_config)
 
-        # Back up before applying changes
-        if not dry_run:
-            try:
-                create_project_backup(
-                    project_dir,
-                    console=console,
-                    auto_approve=auto_approve,
-                    interactive=interactive,
-                )
-            except click.Abort:
-                return True  # User cancelled
-
-        # Apply changes
-        counts = apply_changes(
-            groups=groups,
-            project_dir=project_dir,
-            new_template_dir=new_template_project,
-            auto_approve=auto_approve,
-            dry_run=dry_run,
-            prefer_new=prefer_new,
-            interactive=interactive,
-        )
-
-        # Apply dependency changes (Python only)
-        if not dry_run and dep_result and dep_result.changes:
-            write_merged_dependencies(
-                project_dir / "pyproject.toml",
-                dep_result.merged_deps,
+        if metadata_updates or stale_keys:
+            update_acli_metadata(
+                proj_dir,
+                metadata_updates,
+                acli_version=get_current_version(),
+                language=lang,
+                remove_keys=stale_keys or None,
             )
 
-        # Update ACLI metadata to reflect the new config
-        if not dry_run and cli_overrides:
-            metadata_updates = {
-                k: v
-                for k, v in cli_overrides.items()
-                if isinstance(v, str) and not _should_skip_config_value(v)
-            }
-            stale_keys = _stale_manifest_keys_for_target(cli_overrides, project_config)
-
-            if metadata_updates or stale_keys:
-                update_acli_metadata(
-                    project_dir,
-                    metadata_updates,
-                    acli_version=get_current_version(),
-                    language=language,
-                    remove_keys=stale_keys or None,
-                )
-
-        # Summary
-        console.print()
-        if dry_run:
-            console.print(
-                "[bold yellow]Dry run complete.[/bold yellow] "
-                "Run without --dry-run to apply changes."
-            )
-        else:
-            console.print(f"  Updated: {counts['updated']} files")
-            console.print(f"  Added: {counts['added']} files")
-            console.print(f"  Removed: {counts['removed']} files")
-            if counts["conflicts_kept"] or counts["conflicts_updated"]:
-                console.print(
-                    f"  Conflicts: {counts['conflicts_updated']} updated, "
-                    f"{counts['conflicts_kept']} kept yours"
-                )
-            console.print()
-            console.print("[bold green]✅ Enhance complete![/bold green]")
-
-        return True
-
-    finally:
-        # Cleanup temp directories
-        shutil.rmtree(temp_base, ignore_errors=True)
+    return run_three_way_merge(
+        project_dir=project_dir,
+        project_name=project_name,
+        agent_directory=agent_directory,
+        language=language,
+        old_args=old_args,
+        new_args=new_args,
+        auto_approve=auto_approve,
+        dry_run=dry_run,
+        prefer_new=prefer_new,
+        interactive=interactive,
+        operation_label="enhancement",
+        pre_apply_hook=_backup,
+        post_apply_hook=_update_metadata,
+    )
 
 
 @click.command()
@@ -1018,6 +884,7 @@ def _run_smart_merge(
 )
 @click.option(
     "--dry-run",
+    "--dryrun",
     is_flag=True,
     help="Preview changes without applying them (requires saved metadata)",
     default=False,
