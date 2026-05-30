@@ -17,15 +17,13 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # prepare runs the LLM-driven import without repository contents write access.
-  # `id-token: write` is only for Claude Code Action OIDC authentication; pushes
-  # are still impossible here because `contents` is read-only.
+  # prepare runs the import without repository contents write access. It creates
+  # a local commit and tag, then hands them to the publish job as a bundle.
   # ---------------------------------------------------------------------------
   prepare:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Validate version input
         env:
@@ -51,70 +49,63 @@ jobs:
             exit 1
           fi
 
-      - name: Run import via Claude Code
-        uses: anthropics/claude-code-action@476e359e6203e73dad705c8b322e333fabbd7416  # v1.0.119
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: |
-            You are running inside a GitHub Actions runner. The working directory
-            is the checked-out repository for the unofficial google-agents-cli
-            source mirror.
+      - name: Import wheel and create commit + tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
 
-            Task: import google-agents-cli version ${{ inputs.version }} from
-            PyPI, commit the result, and create a tag. DO NOT push — a separate
-            workflow job will push afterwards.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-            Steps:
-              1. Run: ./scripts/import-wheel.sh ${{ inputs.version }}
-                 The script prints a Source URL and SHA256 at the end.
-                 Capture both verbatim from the script's stdout.
-              2. Run: git status --porcelain
-                 If the output is empty, fail with a clear message.
-                 If any path appears in this output that is OUTSIDE this
-                 allowlist, fail immediately with a clear message and DO NOT
-                 commit:
-                   - google/ (and anything under it)
-                   - METADATA
-                   - RECORD
-                   - WHEEL
-                   - entry_points.txt
-                   - LICENSE
-                   - NOTICE
-                 The import script must only touch these paths; anything else
-                 indicates tampering or a script bug.
-              3. Stage ONLY the allowlisted paths explicitly (do NOT use
-                 `git add -A` or `git add .`). Run:
+          IMPORT_OUTPUT="$(./scripts/import-wheel.sh "${VERSION}")"
+          printf '%s\n' "${IMPORT_OUTPUT}"
 
-                   git add google METADATA RECORD WHEEL entry_points.txt LICENSE NOTICE 2>/dev/null || true
+          SOURCE_URL="$(printf '%s\n' "${IMPORT_OUTPUT}" | sed -n 's/^Source: //p' | tail -n 1)"
+          SHA256="$(printf '%s\n' "${IMPORT_OUTPUT}" | sed -n 's/^SHA256: //p' | tail -n 1)"
+          if ! printf '%s\n' "${SOURCE_URL}" | grep -qE '^https://[^[:space:]]+$'; then
+            echo "::error::could not parse Source URL from import output"
+            exit 1
+          fi
+          if ! printf '%s\n' "${SHA256}" | grep -qE '^[0-9a-f]{64}$'; then
+            echo "::error::could not parse SHA256 from import output"
+            exit 1
+          fi
 
-                 (the `|| true` swallows "pathspec did not match" for
-                 NOTICE, which is optional in the wheel.)
-                 Then run `git status --porcelain` again — if any line
-                 starts with `??` (untracked) or ` M` / ` D` (unstaged
-                 modification), it means a file outside the allowlist was
-                 touched. In that case fail without committing.
-              4. Commit using two -m flags so the body is separated from the
-                 subject by a blank line. Run exactly:
+          ALLOWED='^(google/.*|METADATA|RECORD|WHEEL|entry_points\.txt|LICENSE|NOTICE)$'
+          CHANGED="$( { git diff --name-only; git ls-files --others --exclude-standard; } | sort -u )"
+          if [ -z "${CHANGED}" ]; then
+            echo "::error::import produced no changes"
+            exit 1
+          fi
+          UNEXPECTED="$(printf '%s\n' "${CHANGED}" | grep -vE "${ALLOWED}" || true)"
+          if [ -n "${UNEXPECTED}" ]; then
+            echo "::error::Import touched paths outside the allowlist:"
+            echo "${UNEXPECTED}"
+            exit 1
+          fi
 
-                   git commit \
-                     -m "Import google-agents-cli ${{ inputs.version }} wheel contents" \
-                     -m "Source: <URL>"$'\n'"SHA256: <SHA256>"
+          for file_path in google METADATA RECORD WHEEL entry_points.txt LICENSE NOTICE; do
+            if [ -e "${file_path}" ] || git ls-files --error-unmatch "${file_path}" >/dev/null 2>&1; then
+              git add -- "${file_path}"
+            fi
+          done
 
-                 Replace <URL> and <SHA256> with the values captured in step 1.
-                 The resulting commit message will be:
+          UNSTAGED="$(git diff --name-only)"
+          UNTRACKED="$(git ls-files --others --exclude-standard)"
+          if [ -n "${UNSTAGED}${UNTRACKED}" ]; then
+            echo "::error::Working tree still has unstaged or untracked files after explicit staging:"
+            git status --porcelain
+            exit 1
+          fi
 
-                   Import google-agents-cli ${{ inputs.version }} wheel contents
+          git commit \
+            -m "Import google-agents-cli ${VERSION} wheel contents" \
+            -m "Source: ${SOURCE_URL}"$'\n'"SHA256: ${SHA256}"
+          git tag "v${VERSION}"
 
-                   Source: <URL>
-                   SHA256: <SHA256>
-              5. Create the tag: git tag v${{ inputs.version }}
-              6. Verify: git log -1 --stat && git tag -l "v${{ inputs.version }}"
-
-            Constraints:
-              - Do not push, do not amend, do not modify files outside what
-                the import script changes.
-              - Do not invent Source/SHA256 — they must come from script output.
-          claude_args: "--model claude-sonnet-4-6 --allowedTools 'Bash(./scripts/import-wheel.sh:*),Bash(git:*)' --disallowedTools 'Bash(git push:*)' --max-turns 20"
+          git log -1 --stat
+          git tag -l "v${VERSION}"
 
       - name: Verify commit + tag + diff allowlist
         env:
@@ -215,8 +206,8 @@ jobs:
           git fetch import.bundle "HEAD:refs/import/incoming"
 
       # Independent validation in this trusted, write-credentialed job.
-      # `prepare` runs the LLM and may be tampered with; its checks are
-      # advisory only. The boundary that protects `main` is THIS step:
+      # `prepare` has no write credentials; its checks are advisory only.
+      # The boundary that protects `main` is THIS step:
       # nothing reaches push unless every assertion below holds.
       #
       # Critical: validation must run against the CURRENT remote `main`,
@@ -282,11 +273,11 @@ jobs:
           fi
 
           # 6. Author and committer identity must be exactly the bot identity
-          #    used by Claude Code Action. A compromised prepare job could
+          #    configured in the deterministic prepare job. A compromised prepare job could
           #    otherwise forge "approved by <maintainer>" attribution that
           #    downstream consumers (release tooling, audit logs) would trust.
-          EXPECTED_NAME='claude[bot]'
-          EXPECTED_EMAIL='41898282+claude[bot]@users.noreply.github.com'
+          EXPECTED_NAME='github-actions[bot]'
+          EXPECTED_EMAIL='41898282+github-actions[bot]@users.noreply.github.com'
           IDENT="$(git show -s --format='%an%n%ae%n%cn%n%ce' refs/import/incoming)"
           AN="$(echo "${IDENT}" | sed -n 1p)"
           AE="$(echo "${IDENT}" | sed -n 2p)"
@@ -304,9 +295,9 @@ jobs:
           # 7. Commit body must match exactly two lines:
           #      Source: <URL>
           #      SHA256: <64 hex digits>
-          #    No extra lines, no extra text. The prepare prompt produces
-          #    exactly this shape; anything else means the body was tampered
-          #    with to inject downstream-readable content.
+          #    No extra lines, no extra text. The deterministic prepare step
+          #    produces exactly this shape; anything else means the body was
+          #    tampered with to inject downstream-readable content.
           BODY="$(git log -1 refs/import/incoming --pretty=%b)"
           # Strip a trailing blank line that git can add to %b output.
           BODY="$(printf '%s' "${BODY}" | sed -e :a -e '/^\s*$/{$d;N;ba' -e '}')"
