@@ -87,8 +87,9 @@ def main():
       agents-cli setup                 Install skills to your coding agent
       agents-cli create my-agent       Create a new agent project
       agents-cli playground            Start the local playground
+      agents-cli eval generate         Run agent inference over eval cases
+      agents-cli eval grade            Grade generated traces
       agents-cli scaffold enhance .    Add deployment/CI-CD to a project
-      agents-cli eval run              Run evaluations
       agents-cli deploy                Deploy the agent
     """
     # Disable gcloud interactive prompts for all CLI subprocesses

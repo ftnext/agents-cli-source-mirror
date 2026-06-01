@@ -215,7 +215,7 @@ def _save_adk_evalset(adk_evalset_dict: dict, agent_dir: str) -> str:
         json.dump(adk_evalset_dict, f, indent=2)
 
     # Return path relative to agent's root directory, as required by ADK
-    return f".tmp/{eval_set_id}"
+    return os.path.join(".tmp", eval_set_id)
 
 
 def _prepare_adk_evalsets(

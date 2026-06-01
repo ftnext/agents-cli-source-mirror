@@ -147,6 +147,7 @@ dmypy.json
 
 
 tmp*
+.agents-cli-scripts/
 
 # Node
 **/node_modules

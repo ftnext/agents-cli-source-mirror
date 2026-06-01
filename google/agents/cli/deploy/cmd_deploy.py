@@ -28,6 +28,7 @@ from google.agents.cli._project import (
     find_project_root,
     read_project_config,
     require_deployment_target,
+    resolve_gcp_project,
 )
 from google.agents.cli._runner import popen_resolved, run, run_resolved
 from google.agents.cli.deploy._utils import parse_key_value_pairs
@@ -235,10 +236,8 @@ def cmd_deploy(
     region = region or cfg.region
 
     project_explicitly_passed = bool(project)
-
     # Resolve project once upfront — all deployment targets need it
-    if not project_explicitly_passed:
-        project = _try_resolve_gcp_project()
+    project = project or resolve_gcp_project()
     if not project:
         raise click.ClickException(
             "Could not determine GCP project.\n"
@@ -501,24 +500,6 @@ def _check_cloud_run_status(cfg: ProjectConfig, project: str | None, region: str
         click.echo(f"⏳ Cloud Run service '{service_name}' is not yet ready.")
         if reason:
             click.echo(f"   Reason: {reason}")
-
-
-def _try_resolve_gcp_project() -> str | None:
-    """Try to resolve GCP project from gcloud default config.
-
-    Returns the project ID if found, or None with a warning if not.
-    """
-    result = run(
-        ["gcloud", "config", "get-value", "project"],
-        capture=True,
-        print_cmd=False,
-        check=False,
-    )
-    resolved = result.stdout.strip() if result.returncode == 0 else ""
-    if resolved and resolved != "(unset)":
-        return resolved
-
-    return None
 
 
 def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):

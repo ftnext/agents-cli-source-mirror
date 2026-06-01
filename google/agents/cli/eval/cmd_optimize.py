@@ -27,7 +27,6 @@ from google.agents.cli._project import (
     require_agent_directory,
 )
 from google.agents.cli._runner import run
-from google.agents.cli.eval.cmd_eval import _DEFAULT_CONFIG as _DEFAULT_EVAL_CONFIG
 from google.agents.cli.eval.optimize_utils import _prepare_adk_evalsets
 
 _DEFAULT_OPTIMIZATION_CONFIG = "tests/eval/optimization_config.json"
@@ -57,6 +56,7 @@ def _load_configs_and_datasets(
     if not config_path and os.path.exists(_DEFAULT_OPTIMIZATION_CONFIG):
         config_path = _DEFAULT_OPTIMIZATION_CONFIG
 
+    eval_config = {}
     if config_path:
         with open(config_path, encoding="utf-8") as f:
             combined_config = json.load(f)
@@ -74,14 +74,6 @@ def _load_configs_and_datasets(
             if validation_dataset_path is not None:
                 with open(validation_dataset_path, encoding="utf-8") as f_in:
                     validation_dataset = json.load(f_in)
-
-    # Fallback for eval_config if missing in combined or combined not provided
-    if not eval_config:
-        if os.path.exists(_DEFAULT_EVAL_CONFIG):
-            with open(_DEFAULT_EVAL_CONFIG, encoding="utf-8") as f:
-                eval_config = json.load(f)
-        else:
-            eval_config = {}
 
     # Target metric resolution
     # 1. CLI --target-metric flag overrides everything
@@ -232,8 +224,7 @@ def cmd_optimize(dataset_file, target_metric, config_path):
         - log_level (string, e.g., 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'). Default is 'WARNING'.
         - print_detailed_results (boolean). Set to true to enable printing detailed results. Default is false.
     - Default Paths: By default, it looks for a JSON config file in
-      tests/eval/optimization_config.json. It also uses tests/eval/eval_config.json
-      if your optimization config doesn't specify sampler_config.eval_config.
+      tests/eval/optimization_config.json.
     """
     chdir_project_root()
     cfg = read_project_config()

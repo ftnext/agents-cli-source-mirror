@@ -82,6 +82,7 @@ You can also use features from the [ADK](https://adk.dev/) CLI with `uv run adk`
 | `agents-cli run {{ cmd_name }}`       | {% if cmd_value is mapping %}{% if cmd_value.description %}{{ cmd_value.description }}{% else %}{% if cookiecutter.deployment_target in cmd_value %}{{ cmd_value[cookiecutter.deployment_target] }}{% else %}{{ cmd_value.command if cmd_value.command is string else "" }}{% endif %}{% endif %}{% else %}{{ cmd_value }}{% endif %} |
 {%- endfor %}
 {%- endif %}
+| `agents-cli eval`    | Evaluate agent behavior (generate, grade, analyze, and more — see `agents-cli eval --help`) |
 | `uv run pytest tests/unit tests/integration` | Run unit and integration tests                                                        |
 {%- if cookiecutter.deployment_target in ('cloud_run', 'gke') %}
 | `agents-cli deploy`  | Deploy agent to {{ 'GKE' if cookiecutter.deployment_target == 'gke' else 'Cloud Run' }}                                                                   |

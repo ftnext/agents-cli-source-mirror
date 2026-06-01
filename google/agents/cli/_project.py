@@ -262,6 +262,62 @@ def require_deployment_target(cfg: ProjectConfig) -> None:
         )
 
 
+def resolve_gcp_project() -> str | None:
+    """Resolves the GCP project ID to use.
+
+    The project ID is resolved in the following order of precedence:
+
+    1.  The ``GOOGLE_CLOUD_PROJECT`` environment variable.
+    2.  Application Default Credentials via :func:`google.auth.default`,
+        which itself checks (in order):
+
+        a.  ``GOOGLE_APPLICATION_CREDENTIALS`` service account JSON file.
+        b.  The gcloud SDK ADC file
+            (``gcloud auth application-default login``); when this file
+            exists but lacks a project, the gcloud SDK falls back to
+            ``gcloud config get-value project``.
+        c.  GAE / GCE / Cloud Run metadata service.
+
+    Returns:
+        The resolved GCP project ID, or None if no project is found.
+    """
+    env = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if env:
+        return env
+    # Local import: avoids a circular import at module load time
+    # (auth.py imports from _project transitively in some paths).
+    from google.agents.cli.auth import _get_adc_project
+
+    return _get_adc_project()
+
+
+def resolve_gcp_region(
+    cfg: ProjectConfig | None = None,
+    fallback: str = "us-west1",
+) -> str:
+    """Resolves the GCP region to use, following a specific precedence.
+
+    The region is resolved in the following order:
+    1.  The `region` field from the provided `ProjectConfig` (`cfg`).
+    2.  The value of the `GOOGLE_CLOUD_LOCATION` environment variable.
+    3.  The provided `fallback` value (defaults to "us-west1").
+
+    Args:
+        cfg: Optional ProjectConfig object.
+        fallback: The default region if no other source is found.
+
+    Returns:
+        The resolved GCP region string.
+    """
+    if cfg and cfg.region:
+        return cfg.region
+    env = os.environ.get("GOOGLE_CLOUD_LOCATION")
+    if env:
+        return env
+    logging.info("Using default Google Cloud location: %s", fallback)
+    return fallback
+
+
 def require_a2a_project(cfg: ProjectConfig) -> None:
     """Raise if the project is not an A2A agent."""
     if not cfg.is_a2a:

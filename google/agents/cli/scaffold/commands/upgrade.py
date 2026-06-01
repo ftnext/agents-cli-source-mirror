@@ -26,8 +26,10 @@ from google.agents.cli._tools import ToolNotFoundError, require_tool
 from ..utils.generation_metadata import metadata_to_cli_args
 from ..utils.merge import run_three_way_merge
 from ..utils.upgrade import (
+    migrate_legacy_evalsets,
     migrate_legacy_python_config,
     update_acli_metadata,
+    warn_legacy_eval_config,
 )
 from ..utils.version import get_current_version
 from .enhance import get_project_acli_config
@@ -160,6 +162,11 @@ def upgrade(
     # Post-apply: stamp the new version into the manifest
     def _update_version(proj_dir: pathlib.Path, lang: str) -> None:
         update_acli_metadata(proj_dir, {}, acli_version=new_version, language=lang)
+
+    # Migrate before the merge so a customized evalset isn't clobbered by the
+    # stock template default the merge would otherwise copy in first.
+    migrate_legacy_evalsets(project_dir, dry_run=dry_run)
+    warn_legacy_eval_config(project_dir)
 
     success = run_three_way_merge(
         project_dir=project_dir,

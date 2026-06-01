@@ -25,16 +25,43 @@ def eval_group():
 
     \b
     Subcommands:
-      run      Run agent evaluations
-      compare  Compare two eval result JSON files
-      optimize Optimize agent prompts using the GEPA framework.
+      generate  Run agent inference over eval cases
+      grade     Grade generated traces
+      run       Chain generate + grade in one command
+      dataset   Manage evaluation traces
+      metric    Discover and manage evaluation metrics
+      compare   Compare two eval result JSON files
+      analyze   Analyze loss clusters from results
+      optimize  Optimize agent prompts using the GEPA framework
+      submit    Submit an E2E cloud-side evaluation run on Vertex AI Eval Service
+      results   Fetch results from a completed cloud evaluation run
     """
 
 
 eval_group.add_lazy_command(
+    "generate",
+    "google.agents.cli.eval.cmd_generate:cmd_generate",
+    "Generate agent traces by running inference over eval cases.",
+)
+eval_group.add_lazy_command(
+    "grade",
+    "google.agents.cli.eval.cmd_grade:cmd_grade",
+    "Score populated agent traces against one or more metrics.",
+)
+eval_group.add_lazy_command(
     "run",
-    "google.agents.cli.eval.cmd_eval:cmd_eval",
-    "Run agent evaluations.",
+    "google.agents.cli.eval.cmd_run:cmd_run",
+    "Chain `eval generate` and `eval grade` in one command.",
+)
+eval_group.add_lazy_command(
+    "dataset",
+    "google.agents.cli.eval.cmd_dataset:dataset_group",
+    "Manage evaluation traces.",
+)
+eval_group.add_lazy_command(
+    "metric",
+    "google.agents.cli.eval.cmd_metric:metric_group",
+    "Discover and manage evaluation metrics.",
 )
 eval_group.add_lazy_command(
     "compare",
@@ -42,7 +69,22 @@ eval_group.add_lazy_command(
     "Compare two eval result JSON files.",
 )
 eval_group.add_lazy_command(
+    "analyze",
+    "google.agents.cli.eval.cmd_analyze:cmd_analyze",
+    "Analyze failure clusters from an evaluation run result JSON file.",
+)
+eval_group.add_lazy_command(
     "optimize",
     "google.agents.cli.eval.cmd_optimize:cmd_optimize",
     "Optimize agent prompts using the GEPA framework.",
+)
+eval_group.add_lazy_command(
+    "submit",
+    "google.agents.cli.eval.cmd_submit:cmd_submit",
+    "Submit an E2E cloud-side evaluation run on Vertex AI Eval Service.",
+)
+eval_group.add_lazy_command(
+    "results",
+    "google.agents.cli.eval.cmd_submit:cmd_results",
+    "Fetch results from a completed cloud evaluation run.",
 )

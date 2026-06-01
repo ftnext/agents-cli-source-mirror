@@ -16,12 +16,13 @@
 
 import fnmatch
 import hashlib
+import json
 import logging
 import pathlib
 import re
 import tomllib
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 
@@ -290,6 +291,26 @@ def three_way_compare(
             action="preserve",
             reason="Already up to date",
             preserve_type="already_current",
+            current_hash=current_hash,
+            old_template_hash=old_hash,
+            new_template_hash=new_hash,
+        )
+
+    # Migrated eval dataset: present in project + new template but not the old
+    # one (the old template shipped evalsets/, not datasets/). This is the
+    # converted user content from migrate_legacy_evalsets; preserve it rather
+    # than treating it as a conflict against the stock default.
+    if (
+        old_hash is None
+        and relative_path.startswith(_NEW_DATASETS_DIR + "/")
+        and relative_path.endswith("-dataset.json")
+    ):
+        return FileCompareResult(
+            path=relative_path,
+            category=category,
+            action="preserve",
+            reason="Migrated eval dataset (your content)",
+            preserve_type="acli_unchanged",
             current_hash=current_hash,
             old_template_hash=old_hash,
             new_template_hash=new_hash,
@@ -650,6 +671,189 @@ def migrate_legacy_python_config(
         "  ▸ Legacy pyproject.toml configuration successfully migrated to agents-cli-manifest.yaml",
         fg="cyan",
         dim=True,
+    )
+
+
+_LEGACY_EVALSETS_DIR = "tests/eval/evalsets"
+_NEW_DATASETS_DIR = "tests/eval/datasets"
+_LEGACY_EVALSET_GLOB = "*.evalset.json"
+_LEGACY_EVAL_CONFIG = "tests/eval/eval_config.json"
+_NEW_EVAL_CONFIG = "tests/eval/eval_config.yaml"
+_EVAL_MIGRATION_URL = (
+    "https://google.github.io/agents-cli/reference/eval-dataset-migration/"
+)
+
+
+def _convert_eval_case(old_case: dict[str, Any]) -> dict[str, Any]:
+    new_case: dict[str, Any] = {}
+    case_id = old_case.get("eval_id") or old_case.get("eval_case_id")
+    if case_id:
+        new_case["eval_case_id"] = case_id
+
+    conversation = old_case.get("conversation") or []
+    if not conversation:
+        return new_case
+
+    if len(conversation) == 1:
+        turn = conversation[0]
+        user_parts = (turn.get("user_content") or {}).get("parts") or []
+        new_case["prompt"] = {"role": "user", "parts": user_parts}
+        final_response = turn.get("final_response")
+        if final_response:
+            new_case["reference"] = {
+                "response": {
+                    "role": "model",
+                    "parts": final_response.get("parts") or [],
+                }
+            }
+        return new_case
+
+    events: list[dict[str, Any]] = []
+    last_idx = len(conversation) - 1
+    for i, turn in enumerate(conversation):
+        user_parts = (turn.get("user_content") or {}).get("parts") or []
+        events.append(
+            {
+                "author": "user",
+                "content": {"role": "user", "parts": user_parts},
+            }
+        )
+        final_response = turn.get("final_response")
+        if not final_response:
+            continue
+        if i < last_idx:
+            events.append(
+                {
+                    "author": "agent",
+                    "content": {
+                        "role": "model",
+                        "parts": final_response.get("parts") or [],
+                    },
+                }
+            )
+        else:
+            new_case["reference"] = {
+                "response": {
+                    "role": "model",
+                    "parts": final_response.get("parts") or [],
+                }
+            }
+    new_case["agent_data"] = {
+        "turns": [{"turn_index": 0, "events": events}],
+    }
+    return new_case
+
+
+def _convert_eval_set(old_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "eval_cases": [
+            _convert_eval_case(c) for c in (old_payload.get("eval_cases") or [])
+        ]
+    }
+
+
+def _legacy_to_new_filename(legacy_name: str) -> str:
+    stem = legacy_name[: -len(".evalset.json")]
+    return f"{stem}-dataset.json"
+
+
+def migrate_legacy_evalsets(project_dir: pathlib.Path, dry_run: bool = False) -> None:
+    """Convert tests/eval/evalsets/*.evalset.json to tests/eval/datasets/*-dataset.json.
+
+    No-op when the legacy directory is absent. Skips destination files
+    that already exist. Does not delete the legacy directory; the user
+    removes it after verifying the conversion.
+    """
+    import click
+
+    legacy_dir = project_dir / _LEGACY_EVALSETS_DIR
+    if not legacy_dir.is_dir():
+        return
+
+    legacy_files = sorted(legacy_dir.glob(_LEGACY_EVALSET_GLOB))
+    if not legacy_files:
+        return
+
+    output_dir = project_dir / _NEW_DATASETS_DIR
+
+    if dry_run:
+        count = len(legacy_files)
+        noun = "file" if count == 1 else "files"
+        click.secho(
+            f"  ▸ [Dry run] {count} legacy eval {noun} would be migrated "
+            f"to {_NEW_DATASETS_DIR}/",
+            fg="yellow",
+            dim=True,
+        )
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    converted = 0
+    skipped: list[str] = []
+    failed: list[tuple[str, str]] = []
+
+    for src in legacy_files:
+        dest = output_dir / _legacy_to_new_filename(src.name)
+        if dest.exists():
+            skipped.append(dest.name)
+            continue
+        try:
+            old_payload = json.loads(src.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            failed.append((src.name, str(e)))
+            continue
+        new_payload = _convert_eval_set(old_payload)
+        dest.write_text(json.dumps(new_payload, indent=2) + "\n", encoding="utf-8")
+        converted += 1
+
+    if converted:
+        noun = "file" if converted == 1 else "files"
+        click.secho(
+            f"  ▸ Migrated {converted} legacy eval {noun} to {_NEW_DATASETS_DIR}/. "
+            "Run `agents-cli eval generate` to populate the trace.",
+            fg="cyan",
+            dim=True,
+        )
+    if skipped:
+        click.secho(
+            f"  ▸ WARNING: did NOT migrate {len(skipped)} legacy eval file(s) — "
+            f"a file already exists at the destination: {', '.join(skipped)}. "
+            f"The legacy file(s) remain in {_LEGACY_EVALSETS_DIR}/ unconverted. "
+            "Reconcile manually before deleting the legacy directory.",
+            fg="yellow",
+            bold=True,
+        )
+    if failed:
+        for name, err in failed:
+            click.secho(f"  ▸ Failed to migrate {name}: {err}", fg="red", dim=True)
+        click.secho(
+            f"  ▸ See migration guide: {_EVAL_MIGRATION_URL}",
+            fg="yellow",
+            dim=True,
+        )
+    if converted and not skipped and not failed:
+        click.secho(
+            f"  ▸ All legacy evalsets migrated. You can delete "
+            f"{_LEGACY_EVALSETS_DIR}/ once you've verified the converted files.",
+            fg="cyan",
+            dim=True,
+        )
+
+
+def warn_legacy_eval_config(project_dir: pathlib.Path) -> None:
+    """Warn if a legacy tests/eval/eval_config.json is left over after upgrade."""
+    import click
+
+    if not (project_dir / _LEGACY_EVAL_CONFIG).is_file():
+        return
+
+    click.secho(
+        f"  ▸ WARNING: found legacy {_LEGACY_EVAL_CONFIG}. Grading now reads "
+        f"{_NEW_EVAL_CONFIG}; your custom criteria will NOT apply until "
+        f"migrated. The two schemas differ, so this is not auto-converted. "
+        f"See migration guide: {_EVAL_MIGRATION_URL}",
+        fg="yellow",
+        bold=True,
     )
 
 
