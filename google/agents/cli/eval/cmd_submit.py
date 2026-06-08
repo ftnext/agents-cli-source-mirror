@@ -12,19 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import click
+import vertexai
 from rich.console import Console
 from rich.table import Table
-from vertexai import Client
 from vertexai._genai.types.common import (
     EvaluationDataset,
 )
 
-from google.agents.cli._project import (
-    find_project_root,
-    resolve_gcp_project,
-)
+import google.agents.cli._project as _project
 from google.agents.cli.eval import _paths
 from google.agents.cli.eval.eval_utils import (
     prepare_eval_metrics,
@@ -34,10 +30,10 @@ from google.agents.cli.eval.eval_utils import (
 )
 
 
-def _get_eval_client(project: str | None, region: str | None) -> Client:
+def _get_eval_client(project: str | None, region: str | None) -> vertexai.Client:
     """Resolves GCP project and region, then initializes the Vertex AI Client."""
-    resolved_project = project or resolve_gcp_project()
-    return Client(project=resolved_project, location=resolve_eval_region(region))
+    resolved_project = project or _project.resolve_gcp_project()
+    return vertexai.Client(project=resolved_project, location=resolve_eval_region(region))
 
 
 @click.command("submit")
@@ -194,7 +190,7 @@ def cmd_results(
         results_obj = getattr(run, "evaluation_item_results", None)
         if results_obj:
             if not output_path:
-                project_root = find_project_root()
+                project_root = _project.find_project_root()
                 if not project_root:
                     raise click.ClickException(
                         "Must be in a valid agent project directory unless --output is specified."

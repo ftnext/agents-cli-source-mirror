@@ -75,16 +75,8 @@ def resolve_agent_alias(name: str | None) -> str | None:
 # This replaces Jinja2 conditionals in filenames for Windows compatibility.
 #
 # Format: "relative/path/to/file_or_dir": lambda config: bool_condition
-# The config dict contains: agent_name, cicd_runner, is_adk_live, is_a2a
+# The config dict contains: agent_name, cicd_runner, is_a2a
 # =============================================================================
-
-
-def _exclude_adk_live_agent_runtime(c: dict) -> bool:
-    """Exclude service.tf for adk_live + agent_runtime combination."""
-    return not (
-        c.get("agent_name") == "adk_live"
-        and c.get("deployment_target") == "agent_runtime"
-    )
 
 
 CONDITIONAL_FILES = {
@@ -98,14 +90,7 @@ CONDITIONAL_FILES = {
         lambda c: c.get("cicd_runner") == "github_actions"
     ),
     # Agent-specific conditional files
-    "{agent_directory}/app_utils/gcs.py": (lambda c: c.get("agent_name") == "adk_live"),
-    "{agent_directory}/app_utils/expose_app.py": lambda c: c.get("is_adk_live"),
     "tests/helpers.py": lambda c: c.get("is_a2a"),
-    # Agent Runtime deployment target conditionals
-    "deployment/terraform/cicd/service.tf": _exclude_adk_live_agent_runtime,
-    "deployment/terraform/cicd/service_outputs.tf": _exclude_adk_live_agent_runtime,
-    "deployment/terraform/single-project/service.tf": _exclude_adk_live_agent_runtime,
-    "deployment/terraform/single-project/service_outputs.tf": _exclude_adk_live_agent_runtime,
     # Data ingestion conditional (only for agent_platform_vector_search)
     "data_ingestion": lambda c: c.get("datastore_type") == "agent_platform_vector_search",
     # Datastore-specific terraform files (agent_platform_search vs agent_platform_vector_search)
@@ -183,8 +168,7 @@ def apply_conditional_files(
 
     Args:
         project_path: Path to the generated project directory
-        config: Configuration dict with keys: agent_name, cicd_runner,
-                is_adk_live, is_a2a
+        config: Configuration dict with keys: agent_name, cicd_runner, is_a2a
         agent_directory: Name of the agent directory (replaces {agent_directory} placeholder)
     """
     for rel_path_template, condition_fn in CONDITIONAL_FILES.items():
@@ -1480,7 +1464,6 @@ def process_template(
                 "example_question": template_config.get("example_question", "").ljust(61),
                 "settings": settings,
                 "tags": tags,
-                "is_adk_live": "adk_live" in tags,
                 "is_a2a": "a2a" in tags,
                 "requires_data_ingestion": settings.get("requires_data_ingestion", False),
                 "language": language,
@@ -1670,7 +1653,6 @@ def process_template(
                 "agent_name": agent_name,
                 "deployment_target": deployment_target,
                 "cicd_runner": cicd_runner or "google_cloud_build",
-                "is_adk_live": "adk_live" in tags,
                 "is_a2a": "a2a" in tags,
                 "datastore_type": datastore if datastore else "",
             }
@@ -1800,13 +1782,6 @@ def should_exclude_path(
     path: pathlib.Path, agent_name: str, agent_directory: str = "app"
 ) -> bool:
     """Determine if a path should be excluded based on the agent type."""
-    if agent_name == "adk_live":
-        # Exclude the unit test utils folder and agent utils folder for adk_live
-        if "tests/unit/test_utils" in str(path) or f"{agent_directory}/utils" in str(
-            path
-        ):
-            logging.debug(f"Excluding path for adk_live: {path}")
-            return True
     return False
 
 

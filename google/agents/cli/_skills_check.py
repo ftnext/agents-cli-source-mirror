@@ -99,16 +99,29 @@ def _find_installed_skills() -> dict[str, str]:
         )
         if proc.returncode != 0:
             return {}
-        for entry in json.loads(proc.stdout):
-            name = entry.get("name", "")
-            if not name.startswith("google-agents-cli-"):
-                continue
-            candidate = Path(entry["path"]) / "SKILL.md"
-            version = _parse_skill_version(candidate)
-            if version:
-                result[name] = version
-    except Exception:
-        pass
+        entries = json.loads(proc.stdout)
+    except Exception as e:
+        # Broad by design: this freshness check runs on every CLI invocation and
+        # must never abort a user's command, so any failure degrades to "no skills
+        # found" rather than propagating.
+        logging.warning("Could not query installed skills via npx: %s", e)
+        return {}
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            logging.warning(
+                "Skipping malformed skills entry (expected an object): %r", entry
+            )
+            continue
+        name = entry.get("name", "")
+        if not name.startswith("google-agents-cli-"):
+            continue
+        path = entry.get("path")
+        if not path:
+            continue
+        version = _parse_skill_version(Path(path) / "SKILL.md")
+        if version:
+            result[name] = version
 
     return result
 

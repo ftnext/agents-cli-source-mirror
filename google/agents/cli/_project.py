@@ -19,8 +19,9 @@ from __future__ import annotations
 import logging
 import os
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -36,7 +37,64 @@ class ProjectConfig:
     is_a2a: bool = False
     requires_data_ingestion: bool = False
     region: str = "us-east1"
-    extra: dict = field(default_factory=dict)
+    base_template: str = "adk"
+    acli_version: str = ""
+    language: str = "python"
+    datastore: str = ""
+    session_type: str = "none"
+    cicd_runner: str = "skip"
+    agent_guidance_filename: str = "GEMINI.md"
+
+    @property
+    def create_params(self) -> dict[str, Any]:
+        return {
+            "deployment_target": self.deployment_target,
+            "is_a2a": self.is_a2a,
+            "include_data_ingestion": self.requires_data_ingestion,
+            "datastore": self.datastore,
+            "session_type": self.session_type,
+            "cicd_runner": self.cicd_runner,
+            "agent_guidance_filename": self.agent_guidance_filename,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ProjectConfig:
+        """Create a ProjectConfig from a raw manifest dictionary."""
+        cfg = cls()
+        cfg.project_name = data.get("name", cfg.project_name)
+        cfg.agent_directory = data.get("agent_directory", cfg.agent_directory)
+        cfg.region = data.get("region", cfg.region)
+        cfg.base_template = data.get("base_template", cfg.base_template)
+        cfg.acli_version = (
+            data.get("acli_version") or data.get("version") or cfg.acli_version
+        )
+        cfg.language = data.get("language", cfg.language)
+
+        create_params = data.get("create_params", {})
+
+        datastore = (
+            # datastore_type was briefly used in an older format of the config file,
+            # we include it here in the fallback chain for legacy compatibility.
+            create_params.get("datastore") or data.get("datastore_type") or cfg.datastore
+        )
+        if datastore == "none":
+            datastore = ""
+        cfg.datastore = datastore
+
+        cfg.session_type = create_params.get("session_type", cfg.session_type)
+        cfg.cicd_runner = create_params.get("cicd_runner", cfg.cicd_runner)
+        cfg.agent_guidance_filename = create_params.get(
+            "agent_guidance_filename", cfg.agent_guidance_filename
+        )
+        cfg.deployment_target = create_params.get(
+            "deployment_target", cfg.deployment_target
+        )
+        cfg.is_a2a = create_params.get("is_a2a", cfg.is_a2a)
+        cfg.requires_data_ingestion = create_params.get(
+            "include_data_ingestion", cfg.requires_data_ingestion
+        )
+
+        return cfg
 
 
 _WARNED_LEGACY_CONFIG = False
@@ -94,31 +152,7 @@ def read_project_config(project_dir: str | None = None) -> ProjectConfig:
         # If neither works, return a default project config
         return ProjectConfig()
 
-    cfg = ProjectConfig()
-
-    cfg.project_name = data.get("name", cfg.project_name)
-    cfg.agent_directory = data.get("agent_directory", cfg.agent_directory)
-    cfg.region = data.get("region", cfg.region)
-
-    create_params = data.get("create_params", {})
-    cfg.deployment_target = create_params.get("deployment_target", cfg.deployment_target)
-    cfg.is_a2a = create_params.get("is_a2a", cfg.is_a2a)
-    cfg.requires_data_ingestion = create_params.get(
-        "include_data_ingestion", cfg.requires_data_ingestion
-    )
-
-    cfg.extra = {
-        k: v
-        for k, v in data.items()
-        if k
-        not in {
-            "agent_directory",
-            "region",
-            "name",
-        }
-    }
-
-    return cfg
+    return ProjectConfig.from_dict(data)
 
 
 def check_cli_version(cfg: ProjectConfig) -> None:
@@ -128,7 +162,7 @@ def check_cli_version(cfg: ProjectConfig) -> None:
     ``__version__``.  Emits a warning with upgrade guidance when there is a
     mismatch; never blocks execution.
     """
-    acli_version = cfg.extra.get("acli_version")
+    acli_version = cfg.acli_version
     if not acli_version:
         return
 
@@ -326,3 +360,19 @@ def require_a2a_project(cfg: ProjectConfig) -> None:
             "  To add A2A support to your project, run:\n"
             "    agents-cli scaffold enhance"
         )
+
+
+def find_project_config(project_dir: Path | None = None) -> ProjectConfig | None:
+    """Read agents-cli config from project config files, resolving the project root.
+
+    Args:
+        project_dir: Optional path to start searching from. Defaults to cwd.
+
+    Returns:
+        ProjectConfig object if found, None otherwise.
+    """
+    project_root_dir = find_project_root(project_dir)
+    if project_root_dir is None:
+        return None
+
+    return read_project_config(str(project_root_dir))

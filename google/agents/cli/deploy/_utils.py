@@ -17,6 +17,15 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from google.agents.cli._project import ProjectConfig
+
+
+def resolve_service_name(cfg: ProjectConfig) -> str:
+    """Deployed service name, falling back to a generic name without a manifest."""
+    return cfg.project_name or "agent"
 
 
 def parse_key_value_pairs(kv_string: str | None) -> dict[str, str]:

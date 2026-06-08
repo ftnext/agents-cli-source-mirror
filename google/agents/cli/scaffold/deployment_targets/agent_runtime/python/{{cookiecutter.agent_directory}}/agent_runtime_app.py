@@ -38,10 +38,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 {%- endif %}
 from google.cloud import logging as google_cloud_logging
-{%- if cookiecutter.is_adk_live %}
-from vertexai.agent_engines.templates.adk import AdkApp
-from vertexai.preview.reasoning_engines import AdkApp as PreviewAdkApp
-{%- elif cookiecutter.is_a2a %}
+{%- if cookiecutter.is_a2a %}
 from vertexai.preview.reasoning_engines import A2aAgent
 {%- else %}
 from vertexai.agent_engines.templates.adk import AdkApp
@@ -141,23 +138,11 @@ class AgentEngineApp(AdkApp):
         """Registers the operations of the Agent."""
         operations = super().register_operations()
         operations[""] = [*operations.get("", []), "register_feedback"]
-{%- if cookiecutter.is_adk_live %}
-        # Add bidi_stream_query for adk_live
-        operations["bidi_stream"] = ["bidi_stream_query"]
-{%- endif %}
         return operations
-{%- if cookiecutter.is_a2a %}
 
     def clone(self) -> "AgentEngineApp":
         """Returns a clone of the Agent Runtime application."""
         return self
-{%- endif %}
-{%- if cookiecutter.is_adk_live %}
-
-
-# Add bidi_stream_query support from preview AdkApp for adk_live
-AgentEngineApp.bidi_stream_query = PreviewAdkApp.bidi_stream_query
-{%- endif %}
 
 
 gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")

@@ -43,7 +43,7 @@ from google.agents.cli.deploy._operation import (
     read_operation,
     write_operation,
 )
-from google.agents.cli.deploy._utils import parse_key_value_pairs
+from google.agents.cli.deploy._utils import parse_key_value_pairs, resolve_service_name
 from google.agents.cli.scaffold.utils.language import get_project_version
 
 # Suppress google-cloud-storage version compatibility warning
@@ -152,7 +152,7 @@ def write_deployment_metadata(
         "remote_agent_runtime_id": remote_agent.api_resource.name,
         "deployment_target": "agent_runtime",
         "is_a2a": cfg.is_a2a,
-        "deployment_timestamp": datetime.datetime.now().isoformat(),
+        "deployment_timestamp": datetime.datetime.now(tz=datetime.UTC).isoformat(),
     }
 
     with open(METADATA_FILE, "w", encoding="utf-8") as f:
@@ -374,7 +374,7 @@ def deploy_agent_runtime(
         )
 
     agent_dir = cfg.agent_directory
-    display_name = display_name or cfg.project_name or "agent"
+    display_name = display_name or resolve_service_name(cfg)
     source_packages = source_packages or (f"./{agent_dir}",)
     entrypoint_module = entrypoint_module or f"{agent_dir}.agent_runtime_app"
 

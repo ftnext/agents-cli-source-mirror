@@ -21,17 +21,12 @@ import re
 from typing import Any, Literal, get_args
 
 import click
+import vertexai._genai.types.common as vertex_types
 import yaml
 from rich.console import Console
 from rich.table import Table
 from vertexai._genai import _evals_visualization
 from vertexai._genai._evals_constant import SUPPORTED_PREDEFINED_METRICS
-from vertexai._genai.types.common import (
-    CodeExecutionMetric,
-    EvaluationResult,
-    LLMMetric,
-    Metric,
-)
 
 Execution = Literal["local", "remote"]
 
@@ -185,10 +180,14 @@ def prepare_eval_metrics(
                         fn_value = m_dict["custom_function"]
                         if isinstance(fn_value, str):
                             fn_value = _compile_custom_function(fn_value, m_name)
-                        metrics.append(Metric(name=m_name, custom_function=fn_value))
+                        metrics.append(
+                            vertex_types.Metric(name=m_name, custom_function=fn_value)
+                        )
                         local_custom_count += 1
                     elif execution == "remote":
-                        metrics.append(CodeExecutionMetric.model_validate(m_dict))
+                        metrics.append(
+                            vertex_types.CodeExecutionMetric.model_validate(m_dict)
+                        )
                         remote_custom_count += 1
                     else:
                         raise click.ClickException(
@@ -197,7 +196,7 @@ def prepare_eval_metrics(
                             f"{list(get_args(Execution))}."
                         )
                 else:
-                    metrics.append(LLMMetric.model_validate(m_dict))
+                    metrics.append(vertex_types.LLMMetric.model_validate(m_dict))
             except click.ClickException:
                 raise
             except Exception as e:
@@ -210,7 +209,7 @@ def prepare_eval_metrics(
     return metrics, local_custom_count, remote_custom_count
 
 
-def print_results_table(result: EvaluationResult, console: Console) -> None:
+def print_results_table(result: vertex_types.EvaluationResult, console: Console) -> None:
     """Formats and prints the evaluation result."""
     table = Table(
         title="Evaluation Summary",
@@ -251,7 +250,7 @@ def print_results_table(result: EvaluationResult, console: Console) -> None:
 
 
 def save_evaluation_artifacts(
-    result: EvaluationResult, output_dir: str, console: Console
+    result: vertex_types.EvaluationResult, output_dir: str, console: Console
 ) -> None:
     """Creates the artifacts directory and saves JSON/HTML results."""
     os.makedirs(output_dir, exist_ok=True)

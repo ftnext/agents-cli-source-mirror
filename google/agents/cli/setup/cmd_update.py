@@ -17,8 +17,8 @@
 import click
 
 from google.agents.cli._runner import run
+from google.agents.cli._tools import run_npx_skills
 from google.agents.cli._trust import require_confirmation
-from google.agents.cli.setup.cmd_setup import _run_npx_skills
 
 
 @click.command("update")
@@ -39,21 +39,20 @@ def cmd_update(workspace, yes, interactive):
     if not workspace:
         args.append("-g")
 
-    _run_npx_skills(args, "Updating skills")
+    run_npx_skills(args, "Updating skills")
+
+    # Temporary until npx skills supports Antigravity's IDE / CLI / 2.0 paths:
+    # refresh the mirrored skill links so the IDE/2.0 and CLI see the update.
+    # TODO(b/520131431): remove once Antigravity/npx align on skill paths.
+    if not workspace:
+        from google.agents.cli.setup._antigravity import link_skills_for_antigravity
+
+        for line in link_skills_for_antigravity():
+            click.echo(f"  {line}")
 
     click.echo()
     click.secho("Skills updated.", fg="green", bold=True)
 
     # Best-effort CLI upgrade
     click.echo()
-    result = run(
-        ["uv", "tool", "upgrade", "google-agents-cli"], capture=True, check=False
-    )
-    upgrade_out = (result.stdout or "") + (result.stderr or "")
-    if result.returncode == 0 and "upgraded" in upgrade_out.lower():
-        for line in (result.stdout or "").strip().splitlines():
-            click.echo(f"  {line}")
-    else:
-        click.secho("  CLI already up to date.", dim=True)
-
-    click.echo()
+    run(["uv", "tool", "upgrade", "google-agents-cli"], check=True)

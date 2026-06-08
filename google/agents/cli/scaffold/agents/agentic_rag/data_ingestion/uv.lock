@@ -501,6 +501,7 @@ dependencies = [
     { name = "kfp" },
     { name = "langchain-text-splitters" },
     { name = "markdownify" },
+    { name = "pandas" },
     { name = "swifter" },
 ]
 
@@ -516,6 +517,7 @@ requires-dist = [
     { name = "kfp", specifier = ">=1.4.0" },
     { name = "langchain-text-splitters", specifier = ">=0.3.0" },
     { name = "markdownify", specifier = ">=0.14.0" },
+    { name = "pandas", specifier = "<3" },
     { name = "swifter", specifier = ">=1.4.0" },
 ]
 

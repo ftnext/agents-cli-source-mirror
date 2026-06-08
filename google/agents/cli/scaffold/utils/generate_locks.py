@@ -75,7 +75,6 @@ def generate_pyproject(
             "deployment_target": deployment_target,
             "extra_dependencies": list(config.get("extra_dependencies", [])),
             "tags": tags,
-            "is_adk_live": "adk_live" in tags,
             "is_a2a": "a2a" in tags,
             "agent_directory": config.get("agent_directory", "app"),
             "agent_name": config.get("agent_name", ""),

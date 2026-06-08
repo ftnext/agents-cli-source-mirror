@@ -165,70 +165,7 @@ steps:
         echo $(gcloud auth print-access-token -q) > auth_token.txt
 {%- endif %}
 
-  # Load Testing
-{%- if cookiecutter.deployment_target == 'gke' and cookiecutter.is_adk_live %}
-  - name: "gcr.io/cloud-builders/gcloud"
-    id: load_test
-    entrypoint: /bin/bash
-    args:
-      - "-c"
-      - |
-        curl -LsSf https://astral.sh/uv/0.11.7/install.sh | sh
-        export PATH="$$HOME/.local/bin:$$PATH"
-        kubectl port-forward svc/{{cookiecutter.project_name}} 8080:8080 -n {{cookiecutter.project_name}} &
-        PF_PID=$$!
-        sleep 5
-        uvx --with websockets locust==2.31.1 \
-        -f tests/load_test/load_test.py \
-        --headless \
-        -H http://127.0.0.1:8080 \
-        -t 30s -u 2 -r 2 \
-        --csv=tests/load_test/.results/results \
-        --html=tests/load_test/.results/report.html
-        _LOAD_TEST_EXIT_CODE=$$?
-        kill $$PF_PID || true
-        exit $$_LOAD_TEST_EXIT_CODE
-{%- elif cookiecutter.deployment_target == 'cloud_run' and cookiecutter.is_adk_live %}
-  - name: "gcr.io/cloud-builders/gcloud"
-    id: load_test
-    entrypoint: /bin/bash
-    args:
-      - "-c"
-      - |
-        curl -LsSf https://astral.sh/uv/0.11.7/install.sh | sh
-        export PATH="$$HOME/.local/bin:$$PATH"
-
-        # Install Cloud Run proxy component
-        apt-get update && apt-get install -y google-cloud-cli-cloud-run-proxy
-
-        # Start Cloud Run proxy in background
-        gcloud run services proxy {{cookiecutter.project_name}} \
-        --port=8080 \
-        --region ${_REGION} \
-        --project ${_STAGING_PROJECT_ID} \
-        --quiet &
-        _PROXY_PID=$$!
-
-        # Wait for proxy to be ready
-        echo "Waiting for proxy to start..."
-        sleep 10
-
-        # Run load test and capture exit code
-        uvx --with websockets locust==2.31.1 \
-        -f tests/load_test/load_test.py \
-        --headless \
-        -H http://127.0.0.1:8080 \
-        -t 30s -u 2 -r 2 \
-        --csv=tests/load_test/.results/results \
-        --html=tests/load_test/.results/report.html
-        _LOAD_TEST_EXIT_CODE=$$?
-
-        # Clean up proxy
-        kill $$_PROXY_PID || true
-
-        # Exit with load test result to fail build if tests failed
-        exit $$_LOAD_TEST_EXIT_CODE
-{%- elif cookiecutter.deployment_target == 'cloud_run' %}
+{%- if cookiecutter.deployment_target == 'cloud_run' %}
   - name: "gcr.io/cloud-builders/gcloud"
     id: load_test
     entrypoint: /bin/bash
@@ -268,40 +205,6 @@ steps:
         _LOAD_TEST_EXIT_CODE=$$?
         kill $$PF_PID || true
         exit $$_LOAD_TEST_EXIT_CODE
-{%- elif cookiecutter.deployment_target == 'agent_runtime' and cookiecutter.is_adk_live %}
-  - name: "gcr.io/cloud-builders/gcloud"
-    id: load_test
-    entrypoint: /bin/bash
-    args:
-      - "-c"
-      - |
-        curl -LsSf https://astral.sh/uv/0.11.7/install.sh | sh
-        export PATH="$$HOME/.local/bin:$$PATH"
-        # Start expose app in remote mode (uses deployment_metadata.json by default)
-        uv run python -m {{cookiecutter.agent_directory}}.app_utils.expose_app --mode remote &
-        EXPOSE_PID=$$!
-
-        # Wait for expose app to be ready
-        sleep 10
-
-        # Run load test against local expose app
-        uvx --with websockets locust==2.31.1 \
-        -f tests/load_test/load_test.py \
-        -H http://127.0.0.1:8000 \
-        --headless \
-        -t 30s -u 2 -r 1 \
-        --csv=tests/load_test/.results/results \
-        --html=tests/load_test/.results/report.html
-        LOCUST_EXIT_CODE=$$?
-
-        # Stop expose app
-        kill $$EXPOSE_PID
-
-        # Exit with error if locust test failed
-        if [ $$LOCUST_EXIT_CODE -ne 0 ]; then
-          echo "Load test failed with exit code $$LOCUST_EXIT_CODE"
-          exit $$LOCUST_EXIT_CODE
-        fi
 {%- elif cookiecutter.deployment_target == 'agent_runtime' %}
   - name: "gcr.io/cloud-builders/gcloud"
     id: load_test

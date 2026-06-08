@@ -29,6 +29,7 @@ from kfp.dsl import Input, component
         "kfp>=1.4.0",
         "langchain-text-splitters>=0.3.0",
         "markdownify>=0.14.0",
+        "pandas<3",
         "swifter>=1.4.0",
     ],
 )

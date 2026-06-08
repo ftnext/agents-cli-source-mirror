@@ -14,9 +14,12 @@
 
 """agents-cli deploy command — deploy the agent."""
 
+import logging
+import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 import click
 
@@ -31,10 +34,11 @@ from google.agents.cli._project import (
     resolve_gcp_project,
 )
 from google.agents.cli._runner import popen_resolved, run, run_resolved
-from google.agents.cli.deploy._utils import parse_key_value_pairs
+from google.agents.cli.deploy._utils import parse_key_value_pairs, resolve_service_name
 from google.agents.cli.deploy.agent_runtime import (
     check_agent_runtime_operation,
     deploy_agent_runtime,
+    parse_secrets,
 )
 from google.agents.cli.scaffold.utils.language import get_project_version
 
@@ -90,10 +94,62 @@ def _build_psc_interface_config(
     return config
 
 
+def _load_deploy_config(deployment_target: str | None) -> ProjectConfig:
+    """Resolve project config for a deploy.
+
+    When --deployment-target is given, deploy can run without a manifest. A
+    project root (when present) is chdir'd into because deploy builds from cwd
+    (--source ., relative terraform dirs). Running without a manifest warns so
+    the fallback defaults aren't a surprise.
+    """
+    project_root = find_project_root()
+    if project_root is None and deployment_target is None:
+        raise click.ClickException(
+            "No agents-cli-manifest.yaml found in the current directory or its parents.\n"
+            "  Run this command from your project root, pass --deployment-target to\n"
+            "  deploy without a manifest, or create a project first:\n"
+            "    agents-cli create my-agent"
+        )
+    if project_root is not None:
+        chdir_project_root(project_root)
+
+    cfg = read_project_config()
+    check_cli_version(cfg)
+    if deployment_target:  # explicit flag overrides the manifest
+        cfg.deployment_target = deployment_target
+    require_deployment_target(cfg)
+
+    if project_root is None:
+        # No manifest: surface the defaults in play and the cwd we're building from.
+        logging.warning(
+            "No agents-cli-manifest.yaml found — deploying with defaults "
+            "(name='%s', agent_directory='%s') from %s. "
+            "Pass --project/--region/--service-account to override, or run from "
+            "a scaffolded project.",
+            resolve_service_name(cfg),
+            cfg.agent_directory,
+            os.getcwd(),
+        )
+    return cfg
+
+
 @click.command("deploy")
 @click.option("--project", default=None, help="GCP project ID.")
 @click.option("--region", default=None, help="GCP region.")
-@click.option("--secrets", default=None, help="Comma-separated ENV=SECRET pairs.")
+@click.option(
+    "--deployment-target",
+    "-d",
+    type=click.Choice(["agent_runtime", "cloud_run", "gke"]),
+    default=None,
+    help="Deployment target. Overrides agents-cli-manifest.yaml and lets deploy "
+    "run without a manifest.",
+)
+@click.option(
+    "--secrets",
+    default=None,
+    help="Comma-separated ENV=SECRET or ENV=SECRET:VERSION pairs "
+    "(Agent Runtime, Cloud Run).",
+)
 @click.option(
     "--agent-identity", is_flag=True, default=False, help="Enable agent identity."
 )
@@ -187,6 +243,7 @@ def cmd_deploy(
     *,
     project,
     region,
+    deployment_target,
     secrets,
     agent_identity,
     update_env_vars,
@@ -216,6 +273,9 @@ def cmd_deploy(
       gke          → terraform + docker build + kubectl apply
 
     \b
+    Pass --deployment-target to override the manifest, or to deploy without a
+    manifest (e.g. from a built container or CI):
+      agents-cli deploy --deployment-target cloud_run
 
     \b
     Use --list to show existing deployments:
@@ -229,10 +289,8 @@ def cmd_deploy(
     Use --status to check on a --no-wait deployment:
       agents-cli deploy --status
     """
-    chdir_project_root()
-    cfg = read_project_config()
-    check_cli_version(cfg)
-    require_deployment_target(cfg)
+    cfg = _load_deploy_config(deployment_target)
+
     region = region or cfg.region
 
     project_explicitly_passed = bool(project)
@@ -283,6 +341,14 @@ def cmd_deploy(
             f"for Agent Runtime deployments (current target: {cfg.deployment_target})."
         )
 
+    if secrets and cfg.deployment_target not in ("agent_runtime", "cloud_run"):
+        raise click.ClickException(
+            "--secrets is only supported for Agent Runtime and Cloud Run deployments "
+            f"(current target: {cfg.deployment_target}).\n"
+            "  For GKE, mount secrets via Kubernetes Secrets or the Secret Manager "
+            "CSI driver."
+        )
+
     if cfg.deployment_target == "agent_runtime":
         if dry_run:
             msg = f"  Would deploy to Agent Runtime: project={project}, region={region}"
@@ -312,7 +378,7 @@ def cmd_deploy(
             "gcloud",
             "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install",
         )
-        service_name = cfg.project_name or "agent"
+        service_name = resolve_service_name(cfg)
 
         args = ["gcloud", "run", "deploy", service_name]
         if project:
@@ -363,6 +429,24 @@ def cmd_deploy(
                 )
         env_var_str = ",".join(f"{k}={v}" for k, v in env_var_map.items())
         args.extend(["--update-env-vars", env_var_str])
+
+        # Mount secrets as env vars (ENV=SECRET[:VERSION], version defaults to latest).
+        # Use --update-secrets (merge) to match the --update-env-vars semantics above,
+        # rather than --set-secrets, which would drop any not listed here.
+        if secrets:
+            parsed_secrets = parse_secrets(secrets)
+            overlap = parsed_secrets.keys() & env_var_map.keys()
+            if overlap:
+                raise click.ClickException(
+                    f"{', '.join(sorted(overlap))} cannot be set as both a plain "
+                    "environment variable and a secret. Cloud Run requires each key "
+                    "to be one or the other — rename it or drop it from --update-env-vars."
+                )
+            secret_str = ",".join(
+                f"{env}={spec['secret']}:{spec['version']}"
+                for env, spec in parsed_secrets.items()
+            )
+            args.extend(["--update-secrets", secret_str])
 
         # Add default labels
         args.extend(["--labels", "created-by=adk"])
@@ -415,6 +499,7 @@ def cmd_deploy(
             region=region,
             image=image,
             cluster_name=cluster_name,
+            update_env_vars=update_env_vars,
             dry_run=dry_run,
         )
 
@@ -457,7 +542,7 @@ def _check_cloud_run_status(cfg: ProjectConfig, project: str | None, region: str
         "gcloud",
         "Install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install",
     )
-    service_name = cfg.project_name or "agent"
+    service_name = resolve_service_name(cfg)
     args = [
         "gcloud",
         "run",
@@ -502,13 +587,13 @@ def _check_cloud_run_status(cfg: ProjectConfig, project: str | None, region: str
             click.echo(f"   Reason: {reason}")
 
 
-def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
+def _deploy_gke(*, cfg, project, region, image, cluster_name, update_env_vars, dry_run):
     """GKE deployment: single linear flow with conditional steps.
 
     When ``image`` is provided (CI/CD mode), skips terraform and docker build.
     When ``image`` is None (local dev mode), runs targeted terraform + build flow.
-    Both paths share cluster credentials, kubectl rollout, APP_URL injection,
-    and external IP steps.
+    Both paths share cluster credentials, kubectl rollout, env-var injection
+    (AGENT_VERSION, any --update-env-vars, and APP_URL), and external IP steps.
     """
     deploy_targets = [
         "google_container_cluster.app",
@@ -533,7 +618,7 @@ def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
     _tools.require_tool(
         "kubectl", "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
     )
-    service_name = cfg.project_name or "agent"
+    service_name = resolve_service_name(cfg)
     cluster_name = cluster_name or service_name
 
     if not image:
@@ -556,7 +641,7 @@ def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
             f"  Would run: kubectl set image ... {image or f'{region}-docker.pkg.dev/{project}/{service_name}/{service_name}:latest'}"
         )
         click.echo("  Would run: kubectl get svc ... (service IP)")
-        click.echo("  Would run: kubectl set env ... APP_URL=...")
+        click.echo("  Would run: kubectl set env ... AGENT_VERSION=... APP_URL=...")
         click.echo("  Would run: kubectl rollout status ...")
         return
 
@@ -619,7 +704,13 @@ def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
         check_err_msg="kubectl set image failed",
     )
 
-    # Step 5: Set APP_URL from LoadBalancer IP (used by A2A agents for agent card URL)
+    # Step 5: Inject runtime env vars (AGENT_VERSION, --update-env-vars, APP_URL).
+    # A user-supplied value (via --update-env-vars) takes precedence over the
+    # CLI-derived defaults, matching the Cloud Run and Agent Runtime paths.
+    env_var_map = parse_key_value_pairs(update_env_vars)
+    project_root = find_project_root() or Path.cwd()
+    env_var_map.setdefault("AGENT_VERSION", get_project_version(project_root))
+
     click.echo("\n🌐 Getting service IP...")
     ip_result = run(
         [
@@ -638,22 +729,24 @@ def _deploy_gke(*, cfg, project, region, image, cluster_name, dry_run):
     )
     service_ip = ip_result.stdout.strip() if ip_result.returncode == 0 else ""
     if service_ip:
-        app_url = f"http://{service_ip}:8080"
         click.echo(f"  Service IP: {service_ip}")
-        run(
-            [
-                "kubectl",
-                "set",
-                "env",
-                f"deployment/{service_name}",
-                f"APP_URL={app_url}",
-                "-n",
-                service_name,
-            ],
-            check_err_msg="Failed to set APP_URL",
-        )
+        # APP_URL is used by A2A agents for the agent card URL.
+        env_var_map.setdefault("APP_URL", f"http://{service_ip}:8080")
     else:
         click.echo("  ⚠️  Could not determine service IP — skipping APP_URL injection.")
+
+    run(
+        [
+            "kubectl",
+            "set",
+            "env",
+            f"deployment/{service_name}",
+            *(f"{k}={v}" for k, v in env_var_map.items()),
+            "-n",
+            service_name,
+        ],
+        check_err_msg="Failed to set environment variables",
+    )
 
     # Step 6: Wait for rollout
     run(

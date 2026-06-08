@@ -16,13 +16,13 @@
 
 import random
 import shlex
-import subprocess
 from pathlib import Path
 
 import click
 
-from google.agents.cli._runner import popen_resolved, run
+from google.agents.cli._runner import run
 from google.agents.cli._skills_check import SKILLS_NPX_PACKAGE
+from google.agents.cli._tools import run_npx_skills
 
 _MOTTOS = [
     "Give your coding agent the power to build ADK projects.",
@@ -73,77 +73,6 @@ def _get_source_root():
         except OSError:
             pass
     return None
-
-
-def _run_npx_skills(args, spinner_msg):
-    """Run an npx skills command, streaming output in real-time.
-
-    Always starts with ``["npx", "-y", SKILLS_NPX_PACKAGE]`` and appends
-    the additional ``args`` provided.
-    Streams stdout/stderr line-by-line, filtering npm/npx boilerplate.
-    All non-noise lines are printed immediately. Only concise summary
-    lines (e.g. "Installed 6 skills", "Found 6 skills") are collected
-    for the end summary.
-
-    Returns:
-        A list of summary-worthy lines (short, no decorative content).
-
-    Raises:
-        click.ClickException: If the npx process exits non-zero.
-    """
-    full_args = ["npx", "-y", SKILLS_NPX_PACKAGE, *args]
-    click.secho(f"  \u25b8 {shlex.join(full_args)}", fg="cyan", dim=True)
-
-    summary_lines = []
-    proc = popen_resolved(
-        full_args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-    # Read stdout line-by-line
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        # Skip npx download/cache noise
-        if stripped.startswith("npm ") or stripped.startswith("npx:"):
-            continue
-        # Skip ASCII art banners (block characters)
-        if any(ch in stripped for ch in "█╗╔║╚╝"):
-            continue
-        # Strip leading box-drawing / bullet prefixes to extract text
-        clean = stripped.lstrip("┌┐└┘├┤│◇●◆✓─╮╯ ")
-        if not clean:
-            continue
-        # Skip per-agent detail lines
-        if clean.startswith(("universal:", "symlink", "overwrites:")):
-            continue
-        # Skip purely decorative headers (e.g. "Installation Summary ────")
-        if "──" in clean:
-            continue
-        click.echo(f"  {clean}")
-        # Collect concise summary-worthy lines for the recap
-        if len(clean) < 80 and clean.startswith(
-            ("Installed", "Found", "Done", "Removed", "Updated")
-        ):
-            summary_lines.append(clean)
-
-    proc.wait()
-
-    if proc.returncode != 0:
-        stderr = proc.stderr.read() if proc.stderr else ""
-        click.secho("  Error running npx skills:", fg="red")
-        if stderr.strip():
-            for line in stderr.strip().splitlines():
-                click.echo(f"  {line}")
-        raise click.ClickException("npx skills failed")
-
-    return summary_lines
 
 
 def _check_legacy_skills():
@@ -316,6 +245,12 @@ def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source,
         full_args = ["npx", "-y", SKILLS_NPX_PACKAGE, *args]
         click.secho(f"  \u25b8 {shlex.join(full_args)}", fg="cyan", dim=True)
         click.echo(f"  Scope: {scope}")
+        # Temporary compatibility step (see TODO at the real linking call below).
+        if not workspace and (Path.home() / ".gemini").is_dir():
+            click.echo(
+                "  Would link global skills into Antigravity's skill directories "
+                "(~/.gemini/config/skills, ~/.gemini/antigravity-cli/skills)."
+            )
         click.echo()
 
         if not skip_auth:
@@ -418,7 +353,18 @@ def cmd_setup(*, workspace, skip_auth, dry_run, dev, interactive, skills_source,
     # ── Legacy Skills Detection ──
     _check_legacy_skills()
 
-    summary_lines = _run_npx_skills(args, "Installing skills")
+    summary_lines = run_npx_skills(args, "Installing skills")
+
+    # ── Antigravity skill links ──
+    # Temporary until npx skills supports Antigravity's IDE / CLI / 2.0 paths:
+    # npx installs global skills to ~/.agents/skills, which Antigravity does not
+    # read, so mirror them into the locations the IDE/2.0 and CLI look in.
+    # TODO(b/520131431): remove once Antigravity/npx align on skill paths.
+    if not workspace:
+        from google.agents.cli.setup._antigravity import link_skills_for_antigravity
+
+        for line in link_skills_for_antigravity():
+            click.echo(f"  {line}")
 
     # ── Summary ──
     _print_section(step, "Summary")

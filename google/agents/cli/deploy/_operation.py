@@ -23,10 +23,37 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
 from typing import Any
 
 METADATA_FILE = "deployment_metadata.json"
+
+
+def _read_metadata() -> dict[str, Any]:
+    """Read METADATA_FILE, tolerating a missing or corrupt file.
+
+    A malformed or zero-byte file (left by an interrupted run, a partial
+    write, or a manual edit) is treated as empty so a single bad file can't
+    permanently block every subsequent deploy. Returns ``{}`` when the file
+    is missing or unreadable.
+    """
+    if not os.path.exists(METADATA_FILE):
+        return {}
+    try:
+        with open(METADATA_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning("Ignoring corrupt %s (%s); treating as empty.", METADATA_FILE, e)
+        return {}
+    if not isinstance(data, dict):
+        logging.warning(
+            "Ignoring %s with unexpected top-level %s; treating as empty.",
+            METADATA_FILE,
+            type(data).__name__,
+        )
+        return {}
+    return data
 
 
 def write_operation(
@@ -45,11 +72,7 @@ def write_operation(
     }
 
     # Merge into existing metadata if present
-    data: dict[str, Any] = {}
-    if os.path.exists(METADATA_FILE):
-        with open(METADATA_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-
+    data = _read_metadata()
     data["pending_operation"] = pending
     with open(METADATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -57,19 +80,12 @@ def write_operation(
 
 def read_operation() -> dict[str, Any] | None:
     """Read a pending operation from METADATA_FILE, or None."""
-    if not os.path.exists(METADATA_FILE):
-        return None
-    with open(METADATA_FILE, encoding="utf-8") as f:
-        data = json.load(f)
-    return data.get("pending_operation")
+    return _read_metadata().get("pending_operation")
 
 
 def clear_operation() -> None:
     """Remove the pending_operation field from METADATA_FILE."""
-    if not os.path.exists(METADATA_FILE):
-        return
-    with open(METADATA_FILE, encoding="utf-8") as f:
-        data = json.load(f)
+    data = _read_metadata()
     if "pending_operation" in data:
         del data["pending_operation"]
         with open(METADATA_FILE, "w", encoding="utf-8") as f:

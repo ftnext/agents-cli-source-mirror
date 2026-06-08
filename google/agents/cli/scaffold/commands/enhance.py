@@ -26,7 +26,10 @@ from packaging import version as pkg_version
 from rich.console import Console
 from rich.prompt import IntPrompt, Prompt
 
-from google.agents.cli._project import find_project_root, read_project_config
+from google.agents.cli._project import (
+    ProjectConfig,
+    find_project_config,
+)
 from google.agents.cli._runner import run_resolved
 from google.agents.cli._tools import ToolNotFoundError, require_tool
 
@@ -79,82 +82,20 @@ _EXCLUDED_DIRS = {
 }
 
 
-def _has_legacy_config(project_dir: pathlib.Path) -> bool:
-    """Check if project has legacy config (pyproject.toml)."""
-    pyproj = project_dir / "pyproject.toml"
-    if pyproj.exists():
-        try:
-            with open(pyproj, "rb") as f:
-                pyproj_data = tomllib.load(f)
-            if "tool" in pyproj_data and "agents-cli" in pyproj_data["tool"]:
-                return True
-        except Exception:
-            logging.debug("Failed to read pyproject.toml", exc_info=True)
-            pass
-    return False
-
-
-def get_project_acli_config(project_dir: pathlib.Path) -> dict[str, Any] | None:
-    """Read agents-cli config from project config files.
-
-    Uses read_project_config for unified parsing.
-
-    Args:
-        project_dir: Path to the project directory
-
-    Returns:
-        Normalized config dict if found, None otherwise.
-    """
-    # Handle the case where we're in a subdirectory under the project root.
-    project_root_dir = find_project_root(project_dir)
-    if project_root_dir is not None:
-        project_dir = project_root_dir
-        console.print(f"[dim]Resolved project root to: {project_dir}[/dim]")
-
-    # read_project_config handles both manifest yaml and legacy pyproject.toml config
-    cfg = read_project_config(str(project_dir))
-
-    # Return None if no agents-cli-manifest.yaml or legacy config is present
-    manifest_path = project_dir / "agents-cli-manifest.yaml"
-    if not manifest_path.exists() and not _has_legacy_config(project_dir):
-        return None
-
-    create_params = cfg.extra.get("create_params", {})
-
-    return {
-        "name": cfg.project_name,
-        "base_template": cfg.extra.get("base_template", "adk"),
-        "acli_version": cfg.extra.get("acli_version"),
-        "agent_directory": cfg.agent_directory,
-        "language": cfg.extra.get("language", "python"),
-        "create_params": {
-            "deployment_target": cfg.deployment_target,
-            "session_type": create_params.get("session_type", "none"),
-            "cicd_runner": create_params.get("cicd_runner", "skip"),
-            "include_data_ingestion": cfg.requires_data_ingestion,
-            "is_a2a": cfg.is_a2a,
-            "datastore": create_params.get("datastore", "none"),
-            "agent_guidance_filename": create_params.get(
-                "agent_guidance_filename", "GEMINI.md"
-            ),
-        },
-    }
-
-
 def _should_skip_config_value(value: Any) -> bool:
     """Check if a config value should be skipped (empty, none, skip, etc.)."""
     return value is None or value is False or str(value).lower() in ("none", "skip", "")
 
 
 def build_args_from_config(
-    project_config: dict[str, Any],
+    project_config: ProjectConfig,
     auto_approve: bool = False,
     cli_overrides: dict[str, str] | None = None,
 ) -> list[str]:
     """Build CLI arguments from project config.
 
     Args:
-        project_config: The config dict from the manifest
+        project_config: The ProjectConfig object
         auto_approve: If True, add --auto-approve to args
         cli_overrides: Additional CLI args to merge (e.g., from original command)
 
@@ -169,21 +110,8 @@ def build_args_from_config(
     if auto_approve:
         args.append("--auto-approve")
 
-    # Add base template from metadata
-    base_template = project_config.get("base_template")
-    if base_template:
-        args.extend(["--base-template", base_template])
-
-    # Add agent directory from metadata
-    agent_directory = project_config.get("agent_directory")
-    if agent_directory:
-        args.extend(["--agent-directory", agent_directory])
-
-    # Add create_params via metadata_to_cli_args (single source of truth for
-    # which keys are valid CLI options and how to convert them)
-    args.extend(
-        metadata_to_cli_args({"create_params": project_config.get("create_params", {})})
-    )
+    # Add saved config options (single source of truth for how to convert them)
+    args.extend(metadata_to_cli_args(project_config, for_enhance=True))
 
     # Merge CLI overrides (these take precedence over saved config)
     # This ensures user-provided args like --cicd-runner are passed through
@@ -211,11 +139,11 @@ def build_args_from_config(
     return args
 
 
-def get_display_params_from_config(project_config: dict[str, Any]) -> dict[str, Any]:
+def get_display_params_from_config(project_config: ProjectConfig) -> dict[str, Any]:
     """Extract display-worthy parameters from project config.
 
     Args:
-        project_config: The config dict from the manifest
+        project_config: The ProjectConfig object
 
     Returns:
         Dict of parameter names to values for display
@@ -223,20 +151,20 @@ def get_display_params_from_config(project_config: dict[str, Any]) -> dict[str, 
     display_params: dict[str, Any] = {}
 
     # Add top-level config values
-    base_template = project_config.get("base_template")
+    base_template = project_config.base_template
     if base_template:
         display_params["base_template"] = base_template
 
-    agent_directory = project_config.get("agent_directory")
+    agent_directory = project_config.agent_directory
     if agent_directory:
         display_params["agent_directory"] = agent_directory
 
-    acli_version = project_config.get("acli_version")
+    acli_version = project_config.acli_version
     if acli_version:
         display_params["acli_version"] = acli_version
 
     # Add create_params
-    create_params = project_config.get("create_params", {})
+    create_params = project_config.create_params
     for key, value in create_params.items():
         if _should_skip_config_value(value):
             continue
@@ -274,7 +202,7 @@ def _should_use_different_version(
     skip_version_lock = os.environ.get(_ENV_SKIP_VERSION_LOCK) == "1"
     return (
         not skip_version_lock
-        and project_version is not None
+        and bool(project_version)
         and current_version != "0.0.0"
         and project_version != current_version
     )
@@ -379,7 +307,7 @@ def check_and_execute_with_saved_config(
     if os.environ.get(_ENV_USING_SAVED_CONFIG) == "1":
         return False
 
-    project_config = get_project_acli_config(project_dir)
+    project_config = find_project_config(project_dir)
     if not project_config:
         return False
 
@@ -388,7 +316,7 @@ def check_and_execute_with_saved_config(
         return False
 
     current_version = get_current_version()
-    project_version = project_config.get("acli_version")
+    project_version = project_config.acli_version
     use_different_version = _should_use_different_version(
         project_version, current_version
     )
@@ -410,7 +338,7 @@ def check_and_execute_with_saved_config(
     # when re-executing against an older locked version to avoid crashes.
     is_older_version = (
         use_different_version
-        and project_version is not None
+        and bool(project_version)
         and pkg_version.parse(project_version) < pkg_version.parse(current_version)
     )
     if not is_older_version:
@@ -421,7 +349,7 @@ def check_and_execute_with_saved_config(
     return _execute_with_saved_config(args, project_version, use_different_version)
 
 
-def _prompt_customize_overrides(project_config: dict[str, Any]) -> dict[str, Any]:
+def _prompt_customize_overrides(project_config: ProjectConfig) -> dict[str, Any]:
     """Prompt user to customize project settings interactively.
 
     Uses the same rich numbered menus as the create command. Shows each
@@ -430,16 +358,15 @@ def _prompt_customize_overrides(project_config: dict[str, Any]) -> dict[str, Any
     template (e.g., Go agents don't have session_type).
 
     Args:
-        project_config: The saved project configuration
+        project_config: The saved ProjectConfig object
 
     Returns:
         Dict of only the changed parameter names to new values
     """
-    create_params = project_config.get("create_params", {})
-    base_template = project_config.get("base_template", "adk")
     overrides: dict[str, Any] = {}
 
     # 1. Agent selection
+    base_template = project_config.base_template
     new_agent = display_base_template_selection(base_template)
     if new_agent != base_template:
         overrides["base_template"] = new_agent
@@ -463,7 +390,7 @@ def _prompt_customize_overrides(project_config: dict[str, Any]) -> dict[str, Any
         pass
 
     # 2. Deployment target
-    current_deployment = create_params.get("deployment_target", "cloud_run")
+    current_deployment = project_config.deployment_target or "cloud_run"
     if available_targets and len(available_targets) > 1:
         new_deployment = prompt_deployment_target(
             effective_agent, default_value=current_deployment
@@ -480,13 +407,13 @@ def _prompt_customize_overrides(project_config: dict[str, Any]) -> dict[str, Any
     # 3. Session type — only for cloud_run AND agents that support sessions
     effective_deployment = overrides.get("deployment_target", current_deployment)
     if effective_deployment == "cloud_run" and requires_session:
-        current_session = create_params.get("session_type", "in_memory")
+        current_session = project_config.session_type or "in_memory"
         new_session = prompt_session_type_selection(default_value=current_session)
         if new_session != current_session:
             overrides["session_type"] = new_session
 
     # 4. CI/CD runner
-    current_cicd = create_params.get("cicd_runner", "skip")
+    current_cicd = project_config.cicd_runner or "skip"
     new_cicd = prompt_cicd_runner_selection(default_value=current_cicd)
     if new_cicd != current_cicd:
         overrides["cicd_runner"] = new_cicd
@@ -654,7 +581,7 @@ def display_agent_directory_selection(
 
 
 def _build_enhance_create_args(
-    project_config: dict[str, Any],
+    project_config: ProjectConfig,
     cli_overrides: dict[str, Any] | None = None,
 ) -> list[str]:
     """Build CLI args for create command from project config and enhance overrides.
@@ -662,7 +589,7 @@ def _build_enhance_create_args(
     Merges saved metadata with any CLI overrides provided by the user.
 
     Args:
-        project_config: The saved project configuration
+        project_config: The saved ProjectConfig object
         cli_overrides: CLI args from the enhance command to merge in
 
     Returns:
@@ -715,7 +642,7 @@ def _build_enhance_create_args(
 
 def _stale_manifest_keys_for_target(
     cli_overrides: dict[str, Any],
-    project_config: dict[str, Any],
+    project_config: ProjectConfig,
 ) -> list[str]:
     """Return manifest keys that should be removed for the resolved target.
 
@@ -725,7 +652,7 @@ def _stale_manifest_keys_for_target(
     """
     effective_deployment = cli_overrides.get(
         "deployment_target",
-        project_config.get("create_params", {}).get("deployment_target"),
+        project_config.deployment_target,
     )
     if effective_deployment == "agent_runtime":
         return ["session_type"]
@@ -746,11 +673,11 @@ def _backfill_create_params_from_config(
         Dict with None values filled from saved create_params. CLI values
         always take precedence.
     """
-    config = get_project_acli_config(current_dir)
+    config = find_project_config(current_dir)
     if not config:
         return cli_params
 
-    saved = config.get("create_params", {})
+    saved = config.create_params
     if not saved:
         return cli_params
 
@@ -772,7 +699,7 @@ def _backfill_create_params_from_config(
 def _run_smart_merge(
     *,
     project_dir: pathlib.Path,
-    project_config: dict[str, Any],
+    project_config: ProjectConfig,
     cli_overrides: dict[str, Any] | None,
     auto_approve: bool,
     dry_run: bool,
@@ -787,7 +714,7 @@ def _run_smart_merge(
 
     Args:
         project_dir: Path to the current project
-        project_config: Saved project configuration from metadata
+        project_config: Saved ProjectConfig object from metadata
         cli_overrides: CLI arguments from the enhance command
         auto_approve: If True, auto-apply non-conflicting changes
         dry_run: If True, preview changes without applying
@@ -796,9 +723,9 @@ def _run_smart_merge(
     Returns:
         True if smart-merge completed successfully, False otherwise
     """
-    project_name = project_config.get("name", project_dir.name)
-    agent_directory = project_config.get("agent_directory", "app")
-    language = project_config.get("language", "python")
+    project_name = project_config.project_name or project_dir.name
+    agent_directory = project_config.agent_directory
+    language = project_config.language
 
     # Build args for the "old" template (original generation params)
     old_args = metadata_to_cli_args(project_config)
@@ -985,7 +912,7 @@ def enhance(
         return
 
     if not force and not is_saved_config_subprocess:
-        project_config = get_project_acli_config(current_dir)
+        project_config = find_project_config(current_dir)
         if project_config:
             # Determine overrides source: CLI flags or interactive customize
             overrides: dict[str, Any] | None = None
@@ -1071,7 +998,7 @@ def enhance(
         elif not force:
             # Subprocess re-execution without --force: route through smart-merge
             # so file changes are displayed and confirmation is asked
-            project_config = get_project_acli_config(current_dir)
+            project_config = find_project_config(current_dir)
             if project_config:
                 if _run_smart_merge(
                     project_dir=current_dir,
@@ -1232,13 +1159,13 @@ def enhance(
         is_go_project = base_template and base_template.endswith("_go")
         is_java_project = base_template and base_template.endswith("_java")
         is_ts_project = base_template and base_template.endswith("_ts")
-        acli_config = get_project_acli_config(current_dir)
+        acli_config = find_project_config(current_dir)
         if acli_config:
-            if acli_config.get("language") == "go":
+            if acli_config.language == "go":
                 is_go_project = True
-            elif acli_config.get("language") == "java":
+            elif acli_config.language == "java":
                 is_java_project = True
-            elif acli_config.get("language") == "typescript":
+            elif acli_config.language == "typescript":
                 is_ts_project = True
 
         # Determine agent directory: CLI param > config detection > language default
@@ -1250,7 +1177,8 @@ def enhance(
             detected_agent_directory = "app"
         if not agent_directory:  # Only try to detect if not provided via CLI
             # First check .acli.toml/pyproject.toml config
-            config_agent_dir = acli_config.get("agent_directory") if acli_config else None
+            config_agent_dir = acli_config.agent_directory if acli_config else None
+
             if config_agent_dir and isinstance(config_agent_dir, str):
                 detected_agent_directory = config_agent_dir
             elif not is_go_project and not is_java_project:

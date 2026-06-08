@@ -15,7 +15,9 @@
 """Tool resolution utilities."""
 
 import os
+import shlex
 import shutil
+import subprocess
 from functools import cache
 from pathlib import Path
 
@@ -70,6 +72,11 @@ def _get_cleaned_path() -> str:
     return os.pathsep.join(cleaned_parts)
 
 
+def _is_windows() -> bool:
+    """Returns True if the current operating system is Windows."""
+    return os.name == "nt"
+
+
 def _get_gcloud_fallback() -> str | None:
     """Check common installation paths for gcloud on Windows.
 
@@ -77,7 +84,7 @@ def _get_gcloud_fallback() -> str | None:
     typically happens if the user opted not to add gcloud to the PATH during
     installation.
     """
-    if os.name != "nt":
+    if not _is_windows():
         return None
 
     local_app_data = Path(
@@ -115,7 +122,7 @@ def require_tool(name: str, install_hint: str = "") -> str:
 
     path = shutil.which(name)
 
-    if path is None and os.name == "nt":
+    if path is None and _is_windows():
         path = shutil.which(name, path=_get_cleaned_path())
 
     if path is None:
@@ -131,3 +138,74 @@ def require_tool(name: str, install_hint: str = "") -> str:
 
     _tool_paths[name] = path
     return path
+
+
+def run_npx_skills(args: list[str], spinner_msg: str) -> list[str]:
+    """Run an npx skills command, streaming output in real-time.
+    Always starts with ``["npx", "-y", SKILLS_NPX_PACKAGE]`` and appends
+    the additional ``args`` provided.
+    Streams stdout/stderr line-by-line, filtering npm/npx boilerplate.
+    All non-noise lines are printed immediately. Only concise summary
+    lines (e.g. "Installed 6 skills", "Found 6 skills") are collected
+    for the end summary.
+    Returns:
+        A list of summary-worthy lines (short, no decorative content).
+    Raises:
+        click.ClickException: If the npx process exits non-zero.
+    """
+    from google.agents.cli._runner import popen_resolved
+    from google.agents.cli._skills_check import SKILLS_NPX_PACKAGE
+
+    full_args = ["npx", "-y", SKILLS_NPX_PACKAGE, *args]
+    click.secho(f"  \u25b8 {shlex.join(full_args)}", fg="cyan", dim=True)
+
+    summary_lines = []
+    proc = popen_resolved(
+        full_args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    # Read stdout line-by-line
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip npx download/cache noise
+        if stripped.startswith("npm ") or stripped.startswith("npx:"):
+            continue
+        # Skip ASCII art banners (block characters)
+        if any(ch in stripped for ch in "█╗╔║╚╝"):
+            continue
+        # Strip leading box-drawing / bullet prefixes to extract text
+        clean = stripped.lstrip("┌┐└┘├┤│◇●◆✓─╮╯ ")
+        if not clean:
+            continue
+        # Skip per-agent detail lines
+        if clean.startswith(("universal:", "symlink", "overwrites:")):
+            continue
+        # Skip purely decorative headers (e.g. "Installation Summary ────")
+        if "──" in clean:
+            continue
+        click.echo(f"  {clean}")
+        # Collect concise summary-worthy lines for the recap
+        if len(clean) < 80 and clean.startswith(
+            ("Installed", "Found", "Done", "Removed", "Updated")
+        ):
+            summary_lines.append(clean)
+
+    proc.wait()
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.read() if proc.stderr else ""
+        click.secho("  Error running npx skills:", fg="red")
+        if stderr.strip():
+            for line in stderr.strip().splitlines():
+                click.echo(f"  {line}")
+        raise click.ClickException("npx skills failed")
+
+    return summary_lines

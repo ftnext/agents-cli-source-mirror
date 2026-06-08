@@ -24,7 +24,6 @@ from google.agents.cli._project import (
 )
 from google.agents.cli._runner import run
 from google.agents.cli.data._helpers import (
-    get_datastore_type,
     require_project_id,
     require_rag_project,
 )
@@ -63,9 +62,8 @@ def cmd_data_ingestion(project, region, vector_search_location, collection_id, r
     cfg = read_project_config()
     require_rag_project(cfg)
     region = region or cfg.region
-    datastore_type = get_datastore_type(cfg)
 
-    if not datastore_type:
+    if not cfg.datastore:
         raise click.ClickException(
             "No datastore type configured. "
             "Set datastore under create_params in agents-cli-manifest.yaml."
@@ -75,7 +73,7 @@ def cmd_data_ingestion(project, region, vector_search_location, collection_id, r
     # Resolve collection ID: CLI flag > default convention from Terraform
     collection_id = collection_id or f"{cfg.project_name}-collection"
 
-    if datastore_type == "agent_platform_vector_search":
+    if cfg.datastore == "agent_platform_vector_search":
         if not Path("data_ingestion").is_dir():
             raise click.ClickException(
                 "data-ingestion requires a data_ingestion/ folder but it is missing.\n"
@@ -125,7 +123,7 @@ def cmd_data_ingestion(project, region, vector_search_location, collection_id, r
             args.append("--local")
         run(args, cwd=pipeline_dir, check_err_msg="Data ingestion pipeline failed")
 
-    elif datastore_type == "agent_platform_search":
+    elif cfg.datastore == "agent_platform_search":
         click.echo("🔄 Syncing Agent Platform Search data...")
         sync_script = "deployment/terraform/scripts/start_connector_run.py"
         sync_args = [
@@ -143,7 +141,7 @@ def cmd_data_ingestion(project, region, vector_search_location, collection_id, r
 
     else:
         raise click.ClickException(
-            f"Unknown datastore_type: {datastore_type}. "
+            f"Unknown datastore_type: {cfg.datastore}. "
             "Supported: agent_platform_vector_search, agent_platform_search."
         )
 

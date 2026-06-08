@@ -18,18 +18,13 @@ import glob
 import os
 
 import click
+import vertexai
 from rich.console import Console
-from vertexai import Client
 from vertexai._genai.types.common import (
     EvaluationDataset,
 )
 
-from google.agents.cli._project import (
-    find_project_root,
-    read_project_config,
-    require_agent_directory,
-    resolve_gcp_project,
-)
+import google.agents.cli._project as _project
 from google.agents.cli.eval import _paths
 from google.agents.cli.eval.eval_utils import (
     prepare_eval_metrics,
@@ -126,11 +121,11 @@ def cmd_grade(
 
     if not traces_path or not output_path or not config_path:
         try:
-            project_root = find_project_root()
+            project_root = _project.find_project_root()
             if not project_root:
                 raise FileNotFoundError("No pyproject.toml found.")
-            cfg = read_project_config(str(project_root))
-            require_agent_directory(cfg)
+            cfg = _project.read_project_config(str(project_root))
+            _project.require_agent_directory(cfg)
         except Exception as e:
             raise click.ClickException(
                 "Must be in a valid agent project directory unless both --traces and --output are specified."
@@ -181,7 +176,7 @@ def cmd_grade(
 
     try:
         if needs_gcp:
-            resolved_project = project or resolve_gcp_project()
+            resolved_project = project or _project.resolve_gcp_project()
             if not resolved_project:
                 raise click.ClickException(
                     "Could not determine GCP project. Set one with:\n"
@@ -190,9 +185,9 @@ def cmd_grade(
                     " * gcloud config set project <PROJECT_ID>"
                 )
             resolved_region = resolve_eval_region(region)
-            client = Client(project=resolved_project, location=resolved_region)
+            client = vertexai.Client(project=resolved_project, location=resolved_region)
         else:
-            client = Client(project=None, location=None)
+            client = vertexai.Client(project=None, location=None)
         result = client.evals.evaluate(dataset=merged_dataset, metrics=metrics)
 
         _print_results_table(result, console)

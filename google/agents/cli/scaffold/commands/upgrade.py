@@ -20,7 +20,7 @@ import pathlib
 import click
 from rich.console import Console
 
-from google.agents.cli._project import find_project_root
+from google.agents.cli._project import find_project_config, find_project_root
 from google.agents.cli._tools import ToolNotFoundError, require_tool
 
 from ..utils.generation_metadata import metadata_to_cli_args
@@ -32,7 +32,6 @@ from ..utils.upgrade import (
     warn_legacy_eval_config,
 )
 from ..utils.version import get_current_version
-from .enhance import get_project_acli_config
 
 console = Console()
 
@@ -112,17 +111,17 @@ def upgrade(
 
     migrate_legacy_python_config(project_dir, dry_run=dry_run)
 
-    metadata = get_project_acli_config(project_dir)
+    metadata = find_project_config(project_dir)
     if not metadata:
         console.print("[bold red]Error:[/bold red] No agents-cli metadata found.")
         console.print("Ensure agents-cli-manifest.yaml exists in your project root.")
         raise SystemExit(1)
 
     # Get language from metadata for language-aware operations
-    language = metadata.get("language", "python")
+    language = metadata.language
 
-    # Version is normalized to acli_version by get_project_acli_config
-    old_version = metadata.get("acli_version")
+    # Version is normalized to acli_version by find_project_config
+    old_version = metadata.acli_version
     if not old_version:
         console.print(
             "[bold red]Error:[/bold red] No acli_version found in project metadata."
@@ -155,8 +154,8 @@ def upgrade(
     _display_version_header(old_version, new_version)
 
     # Get project name and CLI args from metadata
-    project_name = metadata.get("name", project_dir.name)
-    agent_directory = metadata.get("agent_directory", "app")
+    project_name = metadata.project_name or project_dir.name
+    agent_directory = metadata.agent_directory or "app"
     cli_args = metadata_to_cli_args(metadata)
 
     # Post-apply: stamp the new version into the manifest

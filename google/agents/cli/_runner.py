@@ -17,7 +17,6 @@
 import os
 import shlex
 import subprocess
-import sys
 
 import click
 
@@ -55,10 +54,12 @@ def run(
         resolve_executable: If True, resolve the executable path using require_tool.
             Defaults to True.
 
+
     Returns:
         CompletedProcess instance.
     """
     cmd_str = shlex.join(args)
+
     if print_cmd:
         click.secho(f"  ▸ {cmd_str}", fg="cyan", dim=True)
 
@@ -81,8 +82,6 @@ def run(
         result = run_resolved(
             args,
             resolve_executable=resolve_executable,
-            stdout=sys.stdout,
-            stderr=sys.stderr,
             cwd=cwd,
             input=input_data,
             env=run_env,

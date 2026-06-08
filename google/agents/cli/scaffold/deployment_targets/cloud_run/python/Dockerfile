@@ -16,27 +16,11 @@ FROM python:3.12-slim
 
 RUN pip install --no-cache-dir uv==0.8.13
 
-{%- if cookiecutter.is_adk_live %}
-# Install Node.js for frontend build
-RUN apt-get update && apt-get install -y \
-    curl \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-{%- endif %}
-
 WORKDIR /code
 
 COPY ./pyproject.toml ./README.md ./uv.lock* ./
 
 COPY ./{{cookiecutter.agent_directory}} ./{{cookiecutter.agent_directory}}
-
-{%- if cookiecutter.is_adk_live %}
-# Copy and build frontend
-COPY ./frontend ./frontend
-RUN cd frontend && npm ci && npm run build
-{%- endif %}
 
 RUN uv sync --frozen
 

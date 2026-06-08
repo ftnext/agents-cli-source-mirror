@@ -25,7 +25,6 @@ from google.agents.cli._project import (
 )
 from google.agents.cli._runner import run
 from google.agents.cli.data._helpers import (
-    get_datastore_type,
     require_project_id,
     require_rag_project,
     resolve_project_id,
@@ -59,7 +58,7 @@ def cmd_infra_datastore(project, region):
     """Provision datastore infrastructure for RAG agents.
 
     \b
-    Reads datastore_type from project config and runs the appropriate
+    Reads datastore type from project config and runs the appropriate
     Terraform targets to set up the data backend.
     """
     chdir_project_root()
@@ -67,9 +66,7 @@ def cmd_infra_datastore(project, region):
     require_rag_project(cfg)
     region = region or cfg.region
 
-    datastore_type = get_datastore_type(cfg)
-
-    if not datastore_type:
+    if not cfg.datastore:
         raise click.ClickException(
             "No datastore type configured. "
             "Set datastore under create_params in agents-cli-manifest.yaml."
@@ -89,7 +86,7 @@ def cmd_infra_datastore(project, region):
     # Init terraform
     run([*tf_base, "init"], check_err_msg="Terraform init failed")
 
-    if datastore_type == "agent_platform_vector_search":
+    if cfg.datastore == "agent_platform_vector_search":
         click.echo("🔧 Provisioning Agent Platform Vector Search datastore...")
         targets = [
             "-target=null_resource.vector_search_collection",
@@ -99,7 +96,7 @@ def cmd_infra_datastore(project, region):
             check_err_msg="Agent Platform Vector Search setup failed",
         )
 
-    elif datastore_type == "agent_platform_search":
+    elif cfg.datastore == "agent_platform_search":
         click.echo("🔧 Provisioning Agent Platform Search datastore...")
         run(
             [
@@ -116,7 +113,7 @@ def cmd_infra_datastore(project, region):
 
     else:
         raise click.ClickException(
-            f"Unknown datastore_type: {datastore_type}. "
+            f"Unknown datastore_type: {cfg.datastore}. "
             "Supported: agent_platform_vector_search, agent_platform_search."
         )
 

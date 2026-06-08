@@ -29,14 +29,22 @@ from google.agents.cli._runner import run
     is_flag=True,
     help="Clean and fix the uv virtual environment. (For example, if the project folder is moved or renamed).",
 )
-def cmd_install(clean: bool):
+@click.option(
+    "--locked",
+    is_flag=True,
+    help="Assert that uv.lock is up to date with pyproject.toml; fail instead of updating it.",
+)
+def cmd_install(clean: bool, locked: bool):
     """Install project dependencies.
 
     Runs: uv sync
     """
     if clean:
         _delete_venv()
-    run(["uv", "sync"], check_err_msg="Failed to install dependencies")
+    cmd = ["uv", "sync"]
+    if locked:
+        cmd.append("--locked")
+    run(cmd, check_err_msg="Failed to install dependencies")
 
 
 def _delete_venv():

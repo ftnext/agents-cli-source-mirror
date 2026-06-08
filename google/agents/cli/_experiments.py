@@ -44,9 +44,10 @@ def resolve_experiment(label: str) -> Any:
                 val = overrides[label]
                 # Cast to correct type if necessary
                 return exp.value_type(val)
-        except json.JSONDecodeError as e:
+        except Exception as e:
             logging.warning(
-                f"Failed to parse AGENTS_CLI_EXPERIMENTS as JSON, no experiment overrides will be applied: {e}"
+                f"Failed to apply AGENTS_CLI_EXPERIMENTS override for '{label}', "
+                f"using default ({exp.default_value}). Error: {e}"
             )
 
     return exp.default_value

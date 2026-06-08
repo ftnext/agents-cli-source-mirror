@@ -18,6 +18,7 @@ import subprocess
 
 import click
 
+from google.agents.cli._project import ProjectConfig
 from google.agents.cli._runner import run_resolved
 
 
@@ -48,28 +49,16 @@ def require_project_id(project: str | None) -> str:
     return project_id
 
 
-def require_rag_project(cfg):
+def require_rag_project(cfg: ProjectConfig | None):
     """Raise if the current project is not an agentic_rag project."""
-    base_template = cfg.extra.get("base_template", "")
-    create_params = cfg.extra.get("create_params", {})
-    is_rag = (
-        base_template == "agentic_rag"
-        or cfg.requires_data_ingestion
-        or create_params.get("include_data_ingestion", False)
-    )
+    if not cfg:
+        raise click.ClickException("No project configuration found")
+
+    is_rag = cfg.base_template == "agentic_rag" or cfg.requires_data_ingestion
     if not is_rag:
         raise click.ClickException(
             "This command requires a project with RAG / data ingestion support.\n"
-            f"  Current base_template: {base_template or 'not set'}\n\n"
+            f"  Current base_template: {cfg.base_template or 'not set'}\n\n"
             "  To add RAG capabilities to your project, run:\n"
             "    agents-cli scaffold enhance"
         )
-
-
-def get_datastore_type(cfg):
-    """Read datastore type from project config, checking both legacy and current paths."""
-    create_params = cfg.extra.get("create_params", {})
-    datastore = create_params.get("datastore", "") or cfg.extra.get("datastore_type", "")
-    if datastore == "none":
-        datastore = ""
-    return datastore
