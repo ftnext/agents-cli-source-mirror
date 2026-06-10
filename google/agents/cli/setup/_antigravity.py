@@ -73,13 +73,30 @@ def _is_link(path: Path) -> bool:
 def _link_target_into(entry: Path, source_root: Path) -> bool:
     """Return True if the link at ``entry`` points somewhere under ``source_root``."""
     try:
-        target = Path(os.readlink(entry))
+        target_str = os.readlink(entry)
+        # Windows-specific path prefix handling:
+        # - "\??\" is the NT Object Manager namespace prefix, often returned by
+        #   os.readlink for Windows junctions.
+        # - "\\?\" is the Win32 device namespace prefix, used for long paths.
+        # Python's pathlib.Path does not recognize these prefixes as absolute roots
+        # (e.g., Path("\??\C:\foo").is_absolute() may return False or behave incorrectly),
+        # so we strip the 4-character prefix to get a standard absolute path.
+        if target_str.startswith("\\??\\"):
+            target_str = target_str[4:]
+        elif target_str.startswith("\\\\?\\"):
+            target_str = target_str[4:]
+        target = Path(target_str)
     except OSError:
         return False
     if not target.is_absolute():
         target = entry.parent / target
     try:
-        return source_root.resolve() in target.resolve().parents
+        resolved_parent = target.parent.resolve()
+        resolved_source = source_root.resolve()
+        return (
+            resolved_source == resolved_parent
+            or resolved_source in resolved_parent.parents
+        )
     except OSError:
         return False
 

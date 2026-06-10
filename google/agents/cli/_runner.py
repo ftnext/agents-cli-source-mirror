@@ -17,6 +17,7 @@
 import os
 import shlex
 import subprocess
+from pathlib import Path
 
 import click
 
@@ -26,7 +27,7 @@ from google.agents.cli import _tools
 def run(
     args: list[str],
     *,
-    cwd: str | None = None,
+    cwd: str | Path | None = None,
     env: dict | None = None,
     capture: bool = False,
     print_cmd: bool = True,

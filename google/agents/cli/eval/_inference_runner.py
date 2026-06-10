@@ -54,6 +54,25 @@ def _unwrap_agent(loaded):
     return loaded
 
 
+def _ensure_eval_compatible(agent):
+    """Inject an empty ``tools`` list where the agent lacks one.
+
+    The Vertex eval SDK's ``AgentConfig.from_agent`` iterates ``agent.tools``
+    unconditionally, but workflow agents (``BaseAgent`` subclasses such as
+    ``SequentialAgent``/``ParallelAgent``/``LoopAgent``) have no ``tools``
+    field, so introspection raises ``AttributeError`` before inference runs.
+    Recurses through ``sub_agents`` because the SDK builds the agent map over
+    the whole tree, and a sub-agent may itself be a workflow agent.
+
+    See https://github.com/googleapis/python-aiplatform/issues/6865.
+    """
+    if not hasattr(agent, "tools"):
+        object.__setattr__(agent, "tools", [])
+    for sub_agent in getattr(agent, "sub_agents", None) or []:
+        _ensure_eval_compatible(sub_agent)
+    return agent
+
+
 def _load_fresh_agent(agents_dir, agent_name):
     """Load an agent from disk, bypassing AgentLoader's in-process cache.
 
@@ -257,7 +276,7 @@ def main(argv=None):
     for i, case in enumerate(cases):
         print(f"[generate] inference {i + 1}/{n_cases}", flush=True)
         case = _normalize_agent_data(case, root_agent_name)
-        agent = _load_fresh_agent(agents_dir, agent_name)
+        agent = _ensure_eval_compatible(_load_fresh_agent(agents_dir, agent_name))
         single = types.EvaluationDataset(eval_cases=[types.EvalCase.model_validate(case)])
         try:
             partial = client.evals.run_inference(src=single, agent=agent)

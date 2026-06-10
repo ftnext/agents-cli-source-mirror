@@ -231,7 +231,11 @@ def is_project_moved() -> bool:
         return False
 
     venv_dir = root / ".venv"
+    # Support both Unix-style (bin) and Windows-style (Scripts) virtualenvs
     activate_script = venv_dir / "bin" / "activate"
+    if not activate_script.exists():
+        activate_script = venv_dir / "Scripts" / "activate"
+
     if not activate_script.exists():
         return False
 

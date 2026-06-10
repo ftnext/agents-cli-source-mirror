@@ -115,12 +115,20 @@ def generate_lock_file(pyproject_content: str, output_path: pathlib.Path) -> Non
             check=True,
         )
 
-        # Also use audit to check / update vulnerabilities
-        run_resolved(
+        # Best-effort audit: warn on unresolved advisories instead of aborting,
+        # since some fixes are unreachable within our version constraints.
+        audit = run_resolved(
             ["uv", "audit", "-U"],
             cwd=tmp_dir,
-            check=True,
+            check=False,
         )
+        if audit.returncode != 0:
+            logging.warning(
+                "uv audit reported unresolved vulnerabilities for %s "
+                "(exit %d); review the advisories above.",
+                output_path.name,
+                audit.returncode,
+            )
 
         # Replace locked-template with {{cookiecutter.project_name}} in generated lock file
         lock_file_path = tmp_dir / "uv.lock"

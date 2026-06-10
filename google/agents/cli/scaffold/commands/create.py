@@ -1026,23 +1026,6 @@ def create(
                     interactive=interactive,
                 )
 
-        # Add BQ Analytics dependencies if the flag was set
-        if bq_analytics:
-            console.print(
-                "\n[bold blue]Adding BigQuery Agent Analytics Plugin dependencies...[/]"
-            )
-            try:
-                template.add_bq_analytics_dependencies(
-                    project_path=project_path,  # Path to the newly created agent project
-                    auto_approve=auto_approve,
-                    interactive=interactive,
-                )
-            except Exception as e:
-                logging.warning(f"Could not add BigQuery Analytics dependencies: {e}")
-                console.print(
-                    f"⚠️  [yellow]Warning: Failed to add BigQuery Analytics dependencies: {e}[/yellow]"
-                )
-
     finally:
         # Clean up the temporary directory if one was created
         if temp_dir_to_clean:

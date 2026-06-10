@@ -238,7 +238,12 @@ def get_project_version(
             )
     except Exception as e:
         logging.warning(
-            f"Failed to resolve project version: {e}. Defaulting to version {default_version}."
+            "Could not read the project version from the [project].version field "
+            "of %s (%s). Falling back to %s — set the version in pyproject.toml, "
+            "or pass AGENT_VERSION via --update-env-vars to override.",
+            pyproject_path,
+            e,
+            default_version,
         )
 
     return default_version

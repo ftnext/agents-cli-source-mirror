@@ -17,7 +17,7 @@ import os
 {%- if cookiecutter.is_a2a %}
 
 import google.auth
-from google.adk.cli.adk_web_server import _setup_instrumentation_lib_if_installed
+from google.adk.cli.api_server import _setup_instrumentation_lib_if_installed
 from google.adk.telemetry.google_cloud import get_gcp_exporters, get_gcp_resource
 from google.adk.telemetry.setup import maybe_set_otel_providers
 {%- endif %}

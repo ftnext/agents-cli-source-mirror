@@ -52,7 +52,8 @@ def cmd_playground(port, host, reload_agents, trace_to_cloud):
 
     # adk web doesn't auto-select the agent — pre-fill it via ?app= so the
     # URL we print drops the user straight into their agent.
-    browser_host = "localhost" if host == "0.0.0.0" else host
+    # Use 127.0.0.1 instead of localhost to avoid IPv6 resolution issues on Windows.
+    browser_host = "127.0.0.1" if host == "0.0.0.0" else host
     url = f"http://{browser_host}:{port}/dev-ui/?app={cfg.agent_directory}"
 
     args = [

@@ -19,7 +19,7 @@ settings:
   requires_session: true
   deployment_targets: ["agent_runtime", "cloud_run", "gke", "none"]
   extra_dependencies: [
-    "google-adk>=1.15.0,<2.0.0",
+    "google-adk[gcp]>=2.0.0,<3.0.0",
     "google-cloud-vectorsearch",
   ]
   tags: ["adk"]

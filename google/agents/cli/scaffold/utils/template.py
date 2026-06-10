@@ -337,42 +337,6 @@ def add_base_template_dependencies(
     )
 
 
-# Dependencies for BigQuery Agent Analytics Plugin
-BQ_ANALYTICS_DEPS = ["google-adk[bigquery-analytics]>=1.21.0"]
-
-
-def add_bq_analytics_dependencies(
-    project_path: pathlib.Path,
-    auto_approve: bool = False,
-    interactive: bool = False,
-) -> bool:
-    """Add BigQuery Agent Analytics Plugin dependencies using uv add.
-
-    Args:
-        project_path: Path to the project directory
-        auto_approve: Whether to skip confirmation and auto-install
-        interactive: Whether to show interactive confirmation prompt
-
-    Returns:
-        True if dependencies were added successfully, False otherwise
-    """
-    dependencies = BQ_ANALYTICS_DEPS
-
-    if interactive:
-        console = Console()
-        console.print(
-            "\nℹ️  Adding BigQuery Agent Analytics Plugin dependencies...", style="cyan"
-        )
-
-    return _add_dependencies(
-        project_path=project_path,
-        dependencies=dependencies,
-        success_message="BQ Analytics dependencies added successfully",
-        auto_approve=auto_approve,
-        interactive=interactive,
-    )
-
-
 def validate_agent_directory_name(
     agent_dir: str, allow_dot: bool = False, language: str = "python"
 ) -> None:

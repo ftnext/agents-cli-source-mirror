@@ -109,7 +109,7 @@ def _resolve_dispatch_target(
     require_agent_directory(cfg)
     port = ensure_server(Path.cwd(), cfg.agent_directory, trace_to_cloud=trace_to_cloud)
     return _DispatchTarget(
-        service_url=f"http://localhost:{port}",
+        service_url=f"http://127.0.0.1:{port}",
         headers={},
         mode="adk",
         app_name=app_name or cfg.agent_directory,

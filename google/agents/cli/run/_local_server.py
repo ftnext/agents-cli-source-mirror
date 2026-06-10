@@ -62,26 +62,26 @@ def ensure_server(
     """
     info = _read_pid_file(project_root)
 
-    if info and _is_server_alive(info["pid"], info["port"]):
-        # Check idle timeout — stop the server if it's been idle too long.
-        if _is_idle(info, idle_timeout):
-            _cleanup(project_root, info)
-        else:
-            if trace_to_cloud and not info.get("trace_to_cloud"):
-                click.secho(
-                    "Warning: reusing existing server that was started "
-                    "without --trace-to-cloud.\n"
-                    "  Run 'agents-cli run --stop-server' first to "
-                    "restart with tracing enabled.",
-                    fg="yellow",
-                    err=True,
-                )
-            _update_activity(project_root)
-            return info["port"]
-
-    # Stale PID file — clean up before starting fresh.
     if info:
-        _cleanup(project_root, info)
+        if _is_server_alive(info["pid"], info["port"]):
+            # Check idle timeout — stop the server if it's been idle too long.
+            if _is_idle(info, idle_timeout):
+                _cleanup(project_root, info)
+            else:
+                if trace_to_cloud and not info.get("trace_to_cloud"):
+                    click.secho(
+                        "Warning: reusing existing server that was started "
+                        "without --trace-to-cloud.\n"
+                        "  Run 'agents-cli run --stop-server' first to "
+                        "restart with tracing enabled.",
+                        fg="yellow",
+                        err=True,
+                    )
+                _update_activity(project_root)
+                return info["port"]
+        else:
+            # Stale PID file — clean up before starting fresh.
+            _cleanup(project_root, info)
 
     port = _find_free_port()
     pid = _start_server(project_root, agent_dir, port, trace_to_cloud=trace_to_cloud)
@@ -295,7 +295,7 @@ def _is_server_alive(pid: int, port: int) -> bool:
     except OSError:
         return False
     try:
-        with socket.create_connection(("localhost", port), timeout=1):
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
             return True
     except OSError:
         return False

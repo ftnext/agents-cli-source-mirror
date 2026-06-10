@@ -26,6 +26,7 @@ import logging
 import os
 import subprocess
 import warnings
+from pathlib import Path
 from typing import Any
 
 import click
@@ -130,6 +131,36 @@ def format_env_value(value: Any) -> str:
     if isinstance(value, dict) and "secret" in value and "version" in value:
         return f"[secret:{value['secret']}:{value['version']}]"
     return str(value)
+
+
+def _build_runtime_env_vars(
+    *,
+    set_env_vars: str | None,
+    secrets: dict[str, dict[str, str]],
+    num_workers: int,
+) -> dict[str, Any]:
+    """Assemble the runtime env vars for the deployed Agent Runtime.
+
+    User ``--update-env-vars`` and ``--set-secrets`` win; everything else is an
+    overridable default:
+
+    - ``AGENT_VERSION`` — the pyproject.toml version, read at runtime by the A2A
+      agent card. Read only when the user hasn't supplied a value, so an override
+      skips the pyproject read and its missing-version warning.
+    - ``NUM_WORKERS`` — defaults to ``num_workers``.
+    - telemetry toggles — Cloud Trace export and prompt/response capture in spans.
+
+    The deploy region is not baked in here: the agent reads ``GOOGLE_CLOUD_LOCATION``
+    at runtime, which the Agent Engine platform injects.
+    """
+    env_vars: dict[str, Any] = parse_key_value_pairs(set_env_vars)
+    env_vars.update(secrets)  # type: ignore[arg-type]
+    if "AGENT_VERSION" not in env_vars:
+        env_vars["AGENT_VERSION"] = get_project_version(find_project_root() or Path.cwd())
+    env_vars.setdefault("NUM_WORKERS", str(num_workers))
+    env_vars.setdefault("GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY", "true")
+    env_vars.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+    return env_vars
 
 
 def _get_resource_name_from_operation(operation_name: str) -> str:
@@ -385,21 +416,14 @@ def deploy_agent_runtime(
         _generate_requirements_file(requirements_file)
 
     # Parse CLI environment variables, secrets, and labels
-    env_vars: dict[str, Any] = parse_key_value_pairs(set_env_vars)
     secrets = parse_secrets(set_secrets)
     labels_dict = parse_key_value_pairs(labels)
 
-    # Merge secrets into env_vars
-    env_vars.update(secrets)  # type: ignore[arg-type]
-
-    project_root = find_project_root() or "."
-    env_vars["AGENT_VERSION"] = get_project_version(project_root)
-    env_vars["GOOGLE_CLOUD_REGION"] = location
-    env_vars["NUM_WORKERS"] = str(num_workers)
-
-    # Enable telemetry by default
-    env_vars.setdefault("GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY", "true")
-    env_vars.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+    env_vars = _build_runtime_env_vars(
+        set_env_vars=set_env_vars,
+        secrets=secrets,
+        num_workers=num_workers,
+    )
 
     print("""
     ╔═══════════════════════════════════════════════════════════╗

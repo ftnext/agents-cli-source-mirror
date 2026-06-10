@@ -461,9 +461,7 @@ def cmd_deploy(
         click.secho(f"  ▸ {cmd_str}", fg="cyan", dim=True)
 
         # Stream stdout and stderr to terminal in real time, capturing stderr for error detection
-        process = popen_resolved(
-            args, stdout=sys.stdout, stderr=subprocess.PIPE, text=True
-        )
+        process = popen_resolved(args, stderr=subprocess.PIPE, text=True)
 
         assert process.stderr is not None
         stderr_chars = []

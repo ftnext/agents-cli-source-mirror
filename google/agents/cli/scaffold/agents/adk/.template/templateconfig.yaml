@@ -18,7 +18,7 @@ settings:
   requires_data_ingestion: false
   requires_session: true
   deployment_targets: ["agent_runtime", "cloud_run", "gke", "none"]
-  extra_dependencies: ["google-adk>=1.15.0,<2.0.0"]
+  extra_dependencies: ["google-adk[gcp]>=2.0.0,<3.0.0"]
   tags: ["adk"]
   frontend_type: "None"
     

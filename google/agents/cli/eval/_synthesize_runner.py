@@ -53,6 +53,25 @@ from google.genai import types as genai_types
 from vertexai import types
 
 
+def _ensure_eval_compatible(agent):
+    """Inject an empty ``tools`` list where the agent lacks one.
+
+    The Vertex eval SDK's ``AgentConfig.from_agent`` iterates ``agent.tools``
+    unconditionally, but workflow agents (``BaseAgent`` subclasses such as
+    ``SequentialAgent``/``ParallelAgent``/``LoopAgent``) have no ``tools``
+    field, so introspection raises ``AttributeError``. Recurses through
+    ``sub_agents`` because the SDK builds the agent map over the whole tree,
+    and a sub-agent may itself be a workflow agent.
+
+    See https://github.com/googleapis/python-aiplatform/issues/6865.
+    """
+    if not hasattr(agent, "tools"):
+        object.__setattr__(agent, "tools", [])
+    for sub_agent in getattr(agent, "sub_agents", None) or []:
+        _ensure_eval_compatible(sub_agent)
+    return agent
+
+
 def _final_response_from_invocations(invocations):
     """Extract the final agent text response across all invocations.
 
@@ -176,6 +195,7 @@ def main():
     except ImportError:
         agent = loaded
 
+    agent = _ensure_eval_compatible(agent)
     agent_info = types.evals.AgentInfo.load_from_agent(agent=agent)
 
     client = vertexai.Client(project=project, location=location)

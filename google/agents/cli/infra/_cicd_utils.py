@@ -122,10 +122,8 @@ def create_github_connection(
             f"--project={project_id}",
         ]
 
-        # Display the command being run
-        click.echo(f"\n🔄 Running command: {shlex.join(cmd)}")
-
-        # Use Popen to get control over stdin
+        # Use popen_resolved directly because we need to send 'y\n' to stdin
+        # and Click's runner doesn't support that easily without wrapping.
         process = popen_resolved(
             cmd,
             stdin=subprocess.PIPE,
@@ -253,7 +251,7 @@ def create_github_connection(
             else:
                 raise Exception(f"Unexpected connection status: {status}")
 
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             click.secho(f"❌ Failed to check connection status: {e}", bold=True, fg="red")
             raise
 
@@ -338,7 +336,7 @@ def require_apis_enabled(project_id: str, apis: list[str]) -> None:
                 missing_apis.append(api)
             else:
                 click.echo(f"✅ {api} already enabled")
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             click.secho(f"❌ Failed to check {api}: {e!s}", bold=True, fg="red")
             raise
 
@@ -370,9 +368,8 @@ def run_command(
     input: str | None = None,
     env_vars: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a command and display it to the user."""
-
-    # Format command for display
+    """Run a command with backoff retries for CI/CD operations."""
+    # Format command for display exactly like the old version
     cmd_str = shlex.join(cmd)
     click.echo(f"\n🔄 Running command: {cmd_str}")
     if cwd:
@@ -384,7 +381,7 @@ def run_command(
         env = os.environ.copy()
         env.update(env_vars)
 
-    # Run the command
+    # Use run_resolved to get raw subprocess behavior (no ClickException)
     result = run_resolved(
         cmd,
         check=check,
@@ -503,7 +500,7 @@ def handle_github_authentication(interactive: bool = True) -> None:
                 )
 
         click.secho("✅ Successfully authenticated with GitHub", fg="green")
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         click.secho(f"❌ Authentication failed: {e}", bold=True, fg="red")
         raise click.Abort() from e
 
@@ -549,7 +546,7 @@ def create_github_repository(repository_owner: str, repository_name: str) -> Non
             click.echo("✅ GitHub repository created")
         else:
             click.echo("✅ Using existing GitHub repository")
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         click.secho(f"❌ Failed to create/check repository: {e!s}", bold=True, fg="red")
         raise
 
@@ -692,7 +689,7 @@ class E2EDeployment:
                         "--versioning",
                     ]
                 )
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             click.echo(f"\n❌ Failed to setup state bucket: {e}")
             raise
 
